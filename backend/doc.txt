@@ -1,0 +1,15 @@
+# Worker Caller
+
+{
+  "model": {
+    "selected_fields": ["f01","f02","f03"],
+    "weights": {"f01": 0.5, "f02": 0.3, "f03": 0.2},
+    "field_thresholds": {"f01": 0.8, "f02": 0.7, "f03": 0.7},
+    "model_threshold": 0.85,
+    "blocking": {
+      "blocking_fields": ["f01","f02"],
+      "max_bucket_size": 500,
+      "blocking_passes": "composite+single"
+    }
+  }
+}

@@ -1,0 +1,242 @@
+.mdmModelsOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.mdmModelsDialog {
+  width: min(1200px, 100%);
+  max-height: 88vh;
+  background: var(--panel, #ffffff);
+  color: var(--text, #111111);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 18px;
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.mdmModelsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+}
+
+.mdmModelsHeaderLeft {
+  min-width: 0;
+}
+
+.mdmModelsTitle {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+.mdmModelsSub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted, rgba(0, 0, 0, 0.6));
+}
+
+.mdmModelsClose {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.mdmModelsClose:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.mdmModelsBody {
+  padding: 16px 18px 18px;
+}
+
+.mdmModelsToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.mdmModelsStatus {
+  font-size: 13px;
+  color: var(--muted, rgba(0, 0, 0, 0.6));
+}
+
+.mdmModelsToolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mdmModelsBtn {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  background: rgba(0, 0, 0, 0.04);
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mdmModelsBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mdmModelsTableWrap {
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 14px;
+  overflow: auto;
+  max-height: calc(88vh - 140px);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.mdmModelsTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 980px;
+}
+
+.mdmModelsTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 12px 12px;
+  background: var(--panel, #ffffff);
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+}
+
+.mdmModelsThBtn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.mdmModelsThBtn:hover {
+  text-decoration: underline;
+}
+
+.mdmModelsThMono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.mdmModelsThRight {
+  text-align: right;
+}
+
+.mdmModelsTable tbody td {
+  padding: 12px 12px;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  vertical-align: top;
+  font-size: 13px;
+}
+
+.mdmModelsTable tbody tr:hover td {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.mdmModelsEmpty {
+  padding: 14px;
+  color: var(--muted, rgba(0, 0, 0, 0.6));
+}
+
+.mdmModelsName {
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 800;
+}
+
+.mdmModelsMono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  white-space: nowrap;
+}
+
+.mdmModelsActionsCell {
+  width: 260px;
+}
+
+.mdmModelsActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mdmModelsLink {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--link, #1a73e8);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.mdmModelsLink:hover {
+  text-decoration: underline;
+}
+
+.mdmModelsDanger {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--danger, #d93025);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.mdmModelsDanger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.mdmModelsJsonRow td {
+  padding: 12px 12px 14px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.mdmModelsJsonLabel {
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--muted, rgba(0, 0, 0, 0.6));
+  margin-bottom: 6px;
+}
+
+.mdmModelsJsonPre {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  background: rgba(0, 0, 0, 0.04);
+  overflow: auto;
+  max-height: 260px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}

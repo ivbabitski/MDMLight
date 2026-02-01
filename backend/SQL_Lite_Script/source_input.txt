@@ -1,0 +1,22 @@
+docker compose exec -T api python - <<'PY'
+import os, sqlite3
+
+db_path = os.environ.get("DB_PATH", "/data/app.db")
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+
+# columns
+cols = [r["name"] for r in conn.execute("PRAGMA table_info(source_input)").fetchall()]
+print("DB_PATH =", db_path)
+print("source_input columns:", cols)
+
+rows = conn.execute("SELECT * FROM source_input LIMIT 5").fetchall()
+print(f"\nFirst {len(rows)} rows:")
+for i, r in enumerate(rows, 1):
+    d = dict(r)
+    print(f"\n--- row {i} ---")
+    for k in cols:
+        print(f"{k}: {d.get(k)}")
+
+conn.close()
+PY

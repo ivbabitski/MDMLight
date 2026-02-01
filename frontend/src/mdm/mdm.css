@@ -1,0 +1,1230 @@
+/* Page shell */
+.mdm {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 12px;
+}
+
+.mdm input { accent-color: var(--accent); }
+
+/* Header (dark coral gradient) */
+.mdmTopbar {
+  border-radius: 22px;
+  padding: 16px 18px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--coral0), var(--coral1), var(--coral2));
+  box-shadow: 0 18px 55px rgba(163, 32, 51, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.mdmBrand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mdmMark {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.22);
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  overflow: hidden;
+}
+
+.mdmMark__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+
+.mdmMark__fallback { font-weight: 900; letter-spacing: 0.04em; }
+
+.mdmTitle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mdmTitle__main {
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  font-size: 20px;
+  line-height: 1.05;
+}
+
+.mdmTitle__sub {
+  font-size: 13px;
+  opacity: 0.92;
+}
+
+.mdmTopbarActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Main canvas */
+.mdmMain {
+  flex: 1;
+  min-height: 0;
+  border-radius: 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  overflow: auto;
+}
+
+.mdmMainInner {
+  padding: 22px;
+  display: grid;
+  gap: 14px;
+}
+
+.mdmHero {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff, var(--panel2));
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.mdmHero h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+}
+
+.mdmHero p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mdmGrid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.mdmCard {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 10px 26px rgba(17, 24, 39, 0.05);
+  overflow: hidden;
+}
+
+.mdmCard__head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.mdmCard__title {
+  font-weight: 900;
+  letter-spacing: 0.01em;
+}
+
+.mdmCard__sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mdmCard__body {
+  padding: 14px 16px;
+}
+
+/* Buttons */
+.mdmBtn {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.mdmBtn:hover { transform: translateY(-1px); box-shadow: 0 10px 18px rgba(17,24,39,0.06); }
+.mdmBtn:active { transform: translateY(0px); box-shadow: none; }
+.mdmBtn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+.mdmBtn--primary {
+  background: linear-gradient(135deg, var(--coral1), var(--coral2));
+  color: #fff;
+  border-color: rgba(209, 74, 74, 0.45);
+  box-shadow: 0 14px 28px rgba(209,74,74,0.18);
+}
+
+.mdmTopbar .mdmBtn--primary {
+  background: rgba(255,255,255,0.92);
+  color: var(--coral1);
+  border-color: rgba(255,255,255,0.35);
+  box-shadow: 0 10px 18px rgba(0,0,0,0.14);
+}
+
+.mdmBtn--ghost {
+  background: transparent;
+}
+
+.mdmBtn--soft {
+  background: var(--panel2);
+}
+
+.mdmBtn--small {
+  padding: 10px 10px;
+  border-radius: 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.mdmPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.16);
+  border: 1px solid rgba(255,255,255,0.22);
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Overlay */
+.mdmOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(17,24,39,0.14);
+  backdrop-filter: blur(6px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 22px;
+}
+
+.mdmWizard {
+  width: 980px;
+  max-width: 100%;
+  max-height: 88vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  box-shadow: var(--shadow2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mdmWizard__head {
+  padding: 18px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.mdmWizard__head h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 950;
+  letter-spacing: 0.01em;
+}
+
+.mdmWizard__head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mdmWizard--step3{
+  /* DO NOT force height */
+  max-height: calc(100vh - 44px);
+}
+
+/* Step 3: ensure stacked cards fully expand (avoid clipped bodies) */
+.mdmWizard--step3 .mdmCard{
+  height: auto;
+  max-height: none;
+}
+
+.mdmWizard--step3 .mdmCard__body{
+  display: block;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+
+.mdmX {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 14px;
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+}
+
+.mdmStepper {
+  padding: 12px 18px;
+  background: var(--panel2);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.mdmStep {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 16px;
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mdmStep__num {
+  width: 34px;
+  height: 34px;
+  border-radius: 14px;
+  background: #f7f2f2;
+  display: grid;
+  place-items: center;
+  font-weight: 950;
+  color: var(--ink);
+}
+
+.mdmStep__meta { display: flex; flex-direction: column; gap: 2px; }
+.mdmStep__title { font-weight: 950; font-size: 14px; }
+.mdmStep__hint { font-size: 12px; color: var(--muted); }
+
+.mdmStep--active {
+  border-color: rgba(209,74,74,0.35);
+  background: rgba(209,74,74,0.06);
+  box-shadow: 0 10px 20px rgba(17,24,39,0.06);
+}
+.mdmStep--active .mdmStep__num {
+  background: rgba(209,74,74,0.14);
+  color: var(--coral1);
+}
+
+.mdmStep--done .mdmStep__num {
+  background: #efe7e7;
+}
+
+/* Wizard body/footer */
+.mdmWizard__body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 18px;
+  overflow: auto; /* ← keep scroll here */
+  display: grid;
+  gap: 14px;
+
+  align-content: start;
+  grid-auto-rows: max-content;
+}
+
+
+
+.mdmWizard__footer {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mdmFooterLeft {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Controls */
+.mdmRow2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mdmLabel { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+
+.mdmInput, .mdmSelect {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #fff;
+  outline: none;
+}
+
+.mdmInput:focus, .mdmSelect:focus {
+  border-color: rgba(209,74,74,0.35);
+  box-shadow: 0 0 0 3px rgba(209,74,74,0.12);
+}
+
+.mdmInputAction { display: flex; gap: 10px; align-items: center; }
+.mdmInputAction .mdmInput { flex: 1; }
+
+.mdmBtnGroup { display: flex; gap: 8px; align-items: center; }
+
+.mdmInputWithIcon{
+  position: relative;
+  flex: 1;
+}
+
+
+.mdmInputIconBtn{
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: rgba(100,116,139,0.9); /* muted grey */
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.mdmInputIconBtn:hover{
+  background: transparent;
+  color: rgba(100,116,139,1);
+}
+
+.mdmInput--withIcon{ padding-right: 40px; }
+
+
+.mdmSeg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 16px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.mdmSeg button {
+  border: 0;
+  background: transparent;
+  border-radius: 12px;
+  padding: 9px 12px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.mdmSeg button:hover { background: var(--panel2); }
+.mdmSeg .isActive {
+  background: var(--accentSoft);
+  color: var(--accentDark);
+  font-weight: 900;
+  box-shadow: inset 0 0 0 1px rgba(209,74,74,0.18);
+}
+
+/* Table */
+.mdmTable {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.mdmTHead, .mdmTRow {
+  display: grid;
+  grid-template-columns: 90px 70px 1fr 200px;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 12px;
+}
+
+.mdmTableBody{
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+
+.mdmInput--locked{
+  background: var(--panel2);
+  color: rgba(17,24,39,0.75);
+}
+
+
+/* reserved rows (created_/updated_) subtle */
+.mdmTRow--reserved{
+  background: rgba(100,116,139,0.03);
+}
+
+.mdmTHead {
+  background: var(--panel2);
+  color: var(--muted);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.mdmTRow {
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+}
+.mdmTRow:last-child { border-bottom: 0; }
+
+.mdmCheck {
+  width: 18px;
+  height: 18px;
+}
+
+.mdmTiny {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Sliders */
+.mdmSliderRow {
+  display: grid;
+  grid-template-columns: 1fr 80px;
+  gap: 10px;
+  align-items: center;
+}
+.mdmSliderRow input[type="range"] { width: 100%; }
+.mdmMono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.mdmDivider { height: 1px; background: var(--border); margin: 4px 0; }
+
+/* Responsive */
+@media (max-width: 980px){
+  .mdmGrid2 { grid-template-columns: 1fr; }
+  .mdmRow2 { grid-template-columns: 1fr; }
+
+  /* Fields table: stack columns, but keep rows readable */
+  .mdmTHead, .mdmTRow { grid-template-columns: 1fr; }
+
+  /* Keep the "All" control; hide the column headings (labels are added per-row below) */
+  .mdmTHead > div:not(:first-child){ display: none; }
+
+  .mdmTRow{ gap: 10px; }
+
+  .mdmTRow > div{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .mdmTRow > div::before{
+    flex: 0 0 72px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .mdmTRow > div:nth-child(1)::before{ content: "Include"; }
+  .mdmTRow > div:nth-child(2)::before{ content: "Key"; }
+  .mdmTRow > div:nth-child(3)::before{ content: "Field"; }
+  .mdmTRow > div:nth-child(4)::before{ content: "Type"; }
+}
+
+
+@media (max-width: 720px){
+  .mdmStepper { grid-template-columns: 1fr; }
+
+  .mdmPerFieldHeader,
+  .mdmWeightRow{
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .mdmPerFieldTotalWeight{
+    grid-column: auto;
+    justify-self: start;
+    text-align: left;
+    padding-top: 0;
+  }
+
+  .mdmSliderRow--weight{ grid-template-columns: 1fr; }
+}
+
+
+.mdmPerFieldHeader{
+  display: grid;
+  grid-template-columns: 200px 1fr 120px 44px;
+  gap: 14px;
+  padding: 0 0 10px;
+}
+
+.mdmPerFieldHeaderLabel{
+  justify-self: center;
+  text-align: center;
+}
+
+.mdmPerFieldTotalWeight{
+  grid-column: 3 / 5;
+  justify-self: center;
+  text-align: center;
+  padding-top: 6px;
+}
+
+
+.mdmWeightRow{
+  display: grid;
+  grid-template-columns: 200px 1fr 120px 44px;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.mdmWeightRemove{
+  justify-self: end;
+}
+
+
+.mdmTRow--required{
+  box-shadow: inset 4px 0 0 rgba(209,74,74,0.35);
+}
+
+.mdmHeadToggle{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+
+
+.mdmPerFieldHeaderRight{
+  justify-self: start;
+}
+
+.mdmWeightsList {
+  max-height: none;
+  overflow: visible;
+  padding-right: 6px;
+}
+
+
+/* Step 3: Per-field matching — 5in tall body (not counting card header) */
+.mdmWizard--step3 .mdmCard--perFieldMatching .mdmCard__body{
+  height: 5in;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.mdmWizard--step3 .mdmCard--perFieldWeights .mdmWeightsList{
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+
+.mdmSurvivorshipList{
+  max-height: 260px;  /* scroll area */
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.mdmFieldName{
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 950;
+  color: rgba(17,24,39,0.92);
+  padding-top: 0;
+}
+
+
+.mdmWeightRow:last-child{
+  border-bottom: 0;
+}
+
+
+.mdmPerFieldSliders{
+  flex: 1;
+  max-width: 640px;
+  display: grid;
+  gap: 12px;
+}
+
+.mdmPerFieldSlider{
+  display: grid;
+  gap: 6px;
+}
+
+.mdmSliderRow--weight{
+  grid-template-columns: 1fr 160px;
+}
+
+.mdmWeightRight{
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.mdmWeightInput{
+  width: 92px;
+  text-align: right;
+}
+
+/* System Priority: keep it compact + scrollable */
+.mdmSystemList{
+  max-height: 160px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.mdmSystemRow{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel2);
+  margin-bottom: 8px;
+}
+
+.mdmIconBtn{
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+}
+
+
+.mdmPriorityList{
+  max-height: clamp(140px, 18vh, 200px); /* slimmer */
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+
+
+.mdmPriorityRow{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;              /* slimmer */
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel2);
+  margin-bottom: 8px;
+}
+
+.mdmPriorityLeft{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mdmDragHandle{
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: rgba(100,116,139,0.9);
+  cursor: grab;
+  user-select: none;
+}
+.mdmDragHandle:active{ cursor: grabbing; }
+
+.mdmPriorityName{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mdmPriorityActions{
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+
+.mdmPriorityPickSelect{
+  width: 100%;
+  padding: 8px 10px; /* slimmer than default */
+}
+
+.mdmPriorityPickWrap{
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.mdmPriorityAddRow{
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+
+
+/* Topbar icon buttons */
+.mdmTopIconBtn{
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  background: rgba(255,255,255,0.20);
+  border: 2px solid rgba(255,255,255,0.32);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 10px 18px rgba(0,0,0,0.14);
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.mdmTopUserLabel{
+  font-size: 12px;
+  font-weight: 800;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.95;
+  margin-right: 38px; /* + mdmTopbarActions gap (10px) ~= 48px */
+}
+
+.mdmTopUserLabel__name{
+  font-weight: 900;
+}
+
+.mdmTopUserUnder{
+  font-size: 12px;
+  font-weight: 900;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1;
+  opacity: 0.95;
+}
+
+
+
+.mdmTopIconBtn:hover{ background: rgba(255,255,255,0.22); }
+.mdmTopIconBtn:active{ background: rgba(255,255,255,0.16); }
+.mdmTopIconBtn svg{ display: block; }
+
+
+/* Simple dialog (task log / user) */
+.mdmDialog{
+  width: 860px;
+  max-width: 100%;
+  max-height: 80vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  box-shadow: var(--shadow2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mdmDialog__head{
+  padding: 18px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.mdmDialog__title{
+  font-size: 20px;
+  font-weight: 950;
+  letter-spacing: 0.01em;
+}
+
+.mdmDialog__sub{
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mdmDialog__body{
+  flex: 1;
+  min-height: 0;
+  padding: 16px 18px;
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+}
+
+/* ===== Main page dashboard additions (surgical) ===== */
+
+.mdmKpiRow{
+  display:grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+@media (max-width: 720px){
+  .mdmKpiRow{ grid-template-columns: 1fr; }
+}
+.mdmKpi{
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 16px;
+  padding: 12px;
+}
+.mdmKpiNum{
+  font-size: 20px;
+  font-weight: 950;
+  letter-spacing: 0.01em;
+  color: rgba(17,24,39,0.92);
+}
+.mdmKpiLab{
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mdmSectionTitle{
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  color: rgba(17,24,39,0.78);
+  margin: 10px 0 8px;
+}
+
+.mdmPillRow{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mdmPillSoft{
+  display:inline-flex;
+  align-items:center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: rgba(17,24,39,0.82);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.mdmPillSoft--strong{
+  background: rgba(209,74,74,0.10);
+  border-color: rgba(209,74,74,0.25);
+  color: rgba(130, 28, 41, 0.95);
+}
+
+.mdmBarList{
+  display:grid;
+  gap: 8px;
+}
+.mdmBarRow{
+  display:grid;
+  grid-template-columns: 70px 1fr 60px;
+  gap: 10px;
+  align-items:center;
+}
+.mdmBarName{
+  font-size: 13px;
+  font-weight: 900;
+  color: rgba(17,24,39,0.86);
+}
+.mdmBarVal{
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.mdmBarTrack{
+  height: 10px;
+  border-radius: 999px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  overflow:hidden;
+}
+.mdmBarFill{
+  display:block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(209,74,74,0.16), rgba(209,74,74,0.36));
+}
+
+.mdmTag{
+  display:inline-flex;
+  align-items:center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  font-size: 12px;
+  color: rgba(17,24,39,0.80);
+  white-space: nowrap;
+}
+.mdmTag--soft{
+  background: rgba(100,116,139,0.06);
+  border-color: rgba(100,116,139,0.18);
+  color: rgba(51,65,85,1);
+}
+.mdmTag--ok{
+  background: rgba(34,197,94,0.12);
+  border-color: rgba(34,197,94,0.22);
+  color: rgba(20,83,45,1);
+}
+.mdmTag--warn{
+  background: rgba(245,158,11,0.14);
+  border-color: rgba(245,158,11,0.24);
+  color: rgba(120,53,15,1);
+}
+
+.mdmWorkFilters{
+  display: grid;
+  grid-template-columns: 1.2fr 220px 220px auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+@media (max-width: 980px){
+  .mdmWorkFilters{ grid-template-columns: 1fr; }
+}
+
+.mdmTableRowBtn{
+  width: 100%;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+.mdmTableRowBtn:hover .mdmTRow{
+  background: rgba(100,116,139,0.03);
+}
+.mdmTableRowBtn.isActive .mdmTRow{
+  background: rgba(209,74,74,0.06);
+  box-shadow: inset 4px 0 0 rgba(209,74,74,0.35);
+}
+
+.mdmWorkEllip{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mdmWorkEmpty{
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mdmFieldGrid{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 720px){
+  .mdmFieldGrid{ grid-template-columns: 1fr; }
+}
+.mdmFieldItem{
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 16px;
+  padding: 12px;
+}
+.mdmFieldValue{
+  margin-top: 4px;
+  font-weight: 850;
+  color: rgba(17,24,39,0.88);
+  word-break: break-word;
+}
+.mdmFieldValue.isMissing{
+  color: rgba(120,53,15,1);
+}
+
+.mdmClusterList{
+  display: grid;
+  gap: 8px;
+}
+.mdmClusterItem{
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel2);
+  padding: 10px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
+}
+.mdmClusterItem:hover{
+  background: rgba(100,116,139,0.06);
+}
+.mdmClusterItem.isActive{
+  background: rgba(209,74,74,0.08);
+  border-color: rgba(209,74,74,0.22);
+}
+.mdmClusterText{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 850;
+  color: rgba(17,24,39,0.86);
+}
+
+.mdmBtn--danger{
+  background: rgba(239,68,68,0.10);
+  border-color: rgba(239,68,68,0.24);
+  color: rgba(127,29,29,1);
+}
+
+.mdmPre{
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #fff;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(17,24,39,0.86);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mdmWideControls{
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.mdmWideTableWrap{
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 560px;
+  background: #fff;
+  position: relative;
+}
+
+
+.mdmWideTable{
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.mdmWideTable thead th{
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--panel2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+  padding: 12px 12px;
+  white-space: nowrap;
+}
+
+
+.mdmWideTable tbody td{
+  border-bottom: 1px solid var(--border);
+  padding: 12px 12px;
+  font-size: 13px;
+  color: rgba(17,24,39,0.88);
+  white-space: nowrap;
+}
+
+.mdmWideTable tbody tr:hover td{
+  background: rgba(100,116,139,0.03);
+}
+
+.mdmWideTable thead th.mdmWideStickyCol{
+  right: 0;
+  z-index: 8;
+  background: var(--panel2);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 24px rgba(17,24,39,0.04);
+}
+
+.mdmWideTable tbody td.mdmWideStickyCol{
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  background: #fff;
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 24px rgba(17,24,39,0.04);
+}
+
+.mdmWideTable tbody tr:hover td.mdmWideStickyCol{
+  background: rgba(100,116,139,0.03);
+}
+
+.mdmWideTable thead th.mdmWideStickyCol,
+.mdmWideTable tbody td.mdmWideStickyCol{
+  min-width: 140px;
+}
+
+
+.mdmRowActions{
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.mdmBtn.mdmIconBtn{
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+}
+.mdmBtn.mdmIconBtn svg{ display: block; }
+
+
+
+.mdmBtn--xs{
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mdmWideEmpty{
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+
+.mdmWideTable.isGolden .mdmWideStickyCol{
+  display: none;
+}

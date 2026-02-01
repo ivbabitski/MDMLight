@@ -1,0 +1,52 @@
+MDM Light Auth (current)
+
+Goal
+- Single source of truth for identity: localStorage "mdm_auth_v1"
+- Single header for all user-scoped APIs: X-User-Id
+
+1) Backend auth endpoints
+- POST /auth/register -> { ok: true, user_id }
+- POST /auth/login    -> { ok: true, user_id, username }
+- POST /auth/recover  -> { ok: true }
+
+2) Frontend storage (src/authStorage.js)
+const KEY = "mdm_auth_v1";
+
+export function loadAuth() -> { user_id, username } | null
+export function saveAuth({ user_id, username })
+export function clearAuth()
+
+Single authorized helpers:
+export function getUserId() -> user_id | null
+export function getUserHeaders() -> { "X-User-Id": "<id>" } | {}
+
+3) On successful login (Login.jsx)
+- saveAuth({ user_id: out.user_id, username: out.username })
+- (optional UI) localStorage.setItem("username", out.username)
+
+4) On logout
+- clearAuth()
+- (optional UI) localStorage.removeItem("username")
+
+5) How every page must call APIs
+- Always pull the user id from authStorage (never invent it)
+- Always send ONLY this header: X-User-Id
+
+Example:
+import { getUserId, getUserHeaders } from "../authStorage";
+
+const userId = getUserId();
+if (!userId) {
+  // treat as logged out (show login)
+}
+
+await fetch(`${API}/something`, {
+  method: "GET",
+  headers: {
+    ...getUserHeaders(),
+  },
+});
+
+6) Backend rule (all user-scoped endpoints)
+- Read user id ONLY from request.headers["X-User-Id"]
+- Scope SQL by app_user_id = <user_id>

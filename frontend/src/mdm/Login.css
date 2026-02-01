@@ -1,0 +1,86 @@
+.login-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.login-modal {
+  background-color: white;
+  padding: 20px;
+  border-radius: 10px;
+  width: 300px;
+  text-align: center;
+}
+
+.login-modal input {
+  width: 80%;
+  padding: 10px;
+  margin: 10px 0;
+}
+
+/* TAB BUTTONS (top row) */
+.login-modal .loginTab {
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+.login-modal .loginTab:hover {
+  border-color: var(--accent);
+  background: var(--accentSoft2);
+}
+
+.login-modal .loginTab[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--accentSoft);
+}
+
+/* PRIMARY SUBMIT BUTTON */
+.login-modal button[type="submit"] {
+  background-color: var(--coral0, #5b0f1b) !important;
+  color: white;
+  border: none;
+}
+
+.login-modal button[type="submit"]:hover {
+  box-shadow: 0 0 0 3px rgba(209, 74, 74, 0.25);
+}
+
+
+.login-modal .loginPrimary:focus-visible,
+.login-modal .loginTab:focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.loginStatus {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.loginStatus--ok {
+  border-color: var(--accent);
+  background: var(--accentSoft2);
+}
+
+.loginStatus--err {
+  border-color: var(--accent);
+  background: rgba(209, 74, 74, 0.12);
+}
+
+.login-modal button[disabled] {
+  opacity: 0.7;
+  cursor: not-allowed;
+}

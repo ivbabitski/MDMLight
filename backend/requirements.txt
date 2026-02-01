@@ -1,0 +1,21 @@
+# API
+Flask>=3.0,<4.0
+flask-cors>=4.0,<5.0
+
+# Data + batch processing
+pandas>=2.2,<3.0
+
+# Fast string distance (Levenshtein, ratios, etc.)
+rapidfuzz>=3.0,<4.0
+
+# SQLite persistence (sqlite is built-in; this is the ORM)
+SQLAlchemy>=2.0,<3.0
+
+# Validate your model-config JSON cleanly
+pydantic>=2.0,<3.0
+
+# Config via env vars in docker
+python-dotenv>=1.0,<2.0
+
+# Run the API properly in containers (instead of Flask dev server)
+gunicorn>=21.0,<23.0

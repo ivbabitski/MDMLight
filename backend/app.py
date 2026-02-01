@@ -1,0 +1,40 @@
+import os
+from flask import Flask
+from flask_cors import CORS
+
+DB_PATH = os.environ.get("DB_PATH", "/data/app.db")
+STORAGE_PATH = os.environ.get("STORAGE_PATH", "/data/storage")
+
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+os.makedirs(STORAGE_PATH, exist_ok=True)
+
+def create_app() -> Flask:
+    app = Flask(__name__)
+    CORS(app)
+
+    # Register APIs (keep app.py as the central register)
+    from apis.system_api import bp as system_bp
+    from apis.ingestion_api import bp as ingestion_bp
+    from apis.csv_upload_api import bp as csv_upload_bp
+    from apis.match_api import bp as match_bp
+    from apis.auth_api import bp as auth_bp
+    from apis.mdm_model_api import bp as mdm_model_bp
+    from apis.source_input_api import bp as source_input_bp
+    #from apis.source_systems_api import bp as source_systems_bp
+
+    app.register_blueprint(system_bp)
+    app.register_blueprint(ingestion_bp)
+    app.register_blueprint(csv_upload_bp)
+    app.register_blueprint(match_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(mdm_model_bp)
+    app.register_blueprint(source_input_bp)
+    #app.register_blueprint(source_systems_bp)
+
+    return app
+
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+

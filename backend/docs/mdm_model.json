@@ -1,0 +1,195 @@
+{
+  "domainModelName": "Person",
+  "sourceType": "csv",
+  "csvFileName": "people.csv",
+  "recordCount": 12500,
+
+  "apiEndpoint": "http://localhost:5000/api/ingest",
+  "apiToken": "0123456789abcdef0123456789abcdef",
+
+  "fields": [
+    {
+      "id": "f-aaa111",
+      "code": "source_name",
+      "label": "source_name",
+      "kind": "required",
+      "include": true,
+      "key": false,
+      "type": "text",
+      "weight": 0,
+      "rule": "recency_updated_date"
+    },
+    {
+      "id": "f-bbb222",
+      "code": "source_id",
+      "label": "source_id",
+      "kind": "required",
+      "include": true,
+      "key": true,
+      "type": "id",
+      "weight": 0,
+      "rule": "recency_updated_date"
+    },
+
+    {
+      "id": "f-ccc333",
+      "code": "f01",
+      "label": "fname",
+      "kind": "flex",
+      "include": true,
+      "key": false,
+      "type": "first_name",
+      "weight": 0.5,
+      "matchThreshold": 0.8,
+      "rule": "recency_updated_date"
+    },
+    {
+      "id": "f-ddd444",
+      "code": "f02",
+      "label": "lname",
+      "kind": "flex",
+      "include": true,
+      "key": false,
+      "type": "last_name",
+      "weight": 0.5,
+      "matchThreshold": 0.8,
+      "rule": "recency_updated_date"
+    },
+
+    {
+      "id": "f-eee555",
+      "code": "f03",
+      "label": "",
+      "kind": "flex",
+      "include": false,
+      "key": false,
+      "type": "text",
+      "weight": 0.25,
+      "rule": "recency_updated_date"
+    },
+    {
+      "id": "f-fff666",
+      "code": "f04",
+      "label": "",
+      "kind": "flex",
+      "include": false,
+      "key": false,
+      "type": "text",
+      "weight": 0.25,
+      "rule": "recency_updated_date"
+    },
+    {
+      "id": "f-ggg777",
+      "code": "f05",
+      "label": "",
+      "kind": "flex",
+      "include": false,
+      "key": false,
+      "type": "text",
+      "weight": 0.25,
+      "rule": "recency_updated_date"
+    },
+
+    {
+      "id": "f-hhh888",
+      "code": "created_at",
+      "label": "created_at",
+      "kind": "reserved",
+      "include": false,
+      "key": false,
+      "type": "date",
+      "weight": 0,
+      "rule": "recency_updated_date"
+    },
+    {
+      "id": "f-iii999",
+      "code": "created_by",
+      "label": "created_by",
+      "kind": "reserved",
+      "include": false,
+      "key": false,
+      "type": "text",
+      "weight": 0,
+      "rule": "recency_updated_date"
+    },
+    {
+      "id": "f-jjj000",
+      "code": "updated_at",
+      "label": "updated_at",
+      "kind": "reserved",
+      "include": false,
+      "key": false,
+      "type": "date",
+      "weight": 0,
+      "rule": "recency_updated_date"
+    },
+    {
+      "id": "f-kkk111",
+      "code": "updated_by",
+      "label": "updated_by",
+      "kind": "reserved",
+      "include": false,
+      "key": false,
+      "type": "text",
+      "weight": 0,
+      "rule": "recency_updated_date"
+    }
+  ],
+
+  "matchThreshold": 0.85,
+  "possibleThreshold": 0.7,
+  "aiExceptions": false,
+
+  "advanced": false,
+  "globalRule": "recency_updated_date",
+  "systemPriority": ["CRM", "ERP", "Web", "Partner"],
+  "userPriority": ["User A", "User B", "User C", "User D"]
+
+
+
+
+  {
+  "actor": "alice",
+  "model_name": "Person",
+  "config": {
+    "domainModelName": "Person",
+
+    "sourceType": "csv",
+    "csvFileName": "people.csv",
+    "recordCount": 12500,
+
+    "apiEndpoint": "http://localhost:5000/api/ingest",
+    "apiToken": "0123456789abcdef",
+
+    "aiExceptions": false,
+
+    "matchThreshold": 0.85,
+    "possibleThreshold": 0.7,
+
+    "advanced": false,
+    "globalRule": "recency_updated_date",
+    "systemPriority": ["CRM", "ERP", "Web", "Partner"],
+    "userPriority": ["User A", "User B", "User C", "User D"],
+
+    "fields": [
+      { "id": "f-1", "code": "source_name", "label": "source_name", "kind": "required", "include": true, "key": false, "type": "text", "weight": 0, "rule": "recency_updated_date" },
+      { "id": "f-2", "code": "source_id", "label": "source_id", "kind": "required", "include": true, "key": true, "type": "id", "weight": 0, "rule": "recency_updated_date" },
+
+      { "id": "f-3", "code": "f01", "label": "fname", "kind": "flex", "include": true, "key": false, "type": "first_name", "weight": 0.5, "matchThreshold": 0.8, "rule": "recency_updated_date" },
+      { "id": "f-4", "code": "f02", "label": "lname", "kind": "flex", "include": true, "key": false, "type": "last_name", "weight": 0.5, "matchThreshold": 0.8, "rule": "recency_updated_date" },
+
+      { "id": "f-5", "code": "created_at", "label": "created_at", "kind": "reserved", "include": false, "key": false, "type": "date", "weight": 0, "rule": "recency_updated_date" },
+      { "id": "f-6", "code": "created_by", "label": "created_by", "kind": "reserved", "include": false, "key": false, "type": "text", "weight": 0, "rule": "recency_updated_date" },
+      { "id": "f-7", "code": "updated_at", "label": "updated_at", "kind": "reserved", "include": false, "key": false, "type": "date", "weight": 0, "rule": "recency_updated_date" },
+      { "id": "f-8", "code": "updated_by", "label": "updated_by", "kind": "reserved", "include": false, "key": false, "type": "text", "weight": 0, "rule": "recency_updated_date" }
+    ]
+  }
+}
+
+}
+
+
+
+GET /mdm/models/<id>
+
+GET /mdm/models/by-name/<model_name>

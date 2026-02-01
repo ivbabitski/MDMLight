@@ -1,0 +1,51 @@
+services:
+  api:
+    build: ./backend
+    depends_on:
+      db_init:
+        condition: service_completed_successfully
+    ports:
+      - "5000:5000"
+    environment:
+      - DB_PATH=/data/app.db
+      - STORAGE_PATH=/data/storage
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_USER=yourgmail@gmail.com
+      - SMTP_PASS=your_app_password
+      - SMTP_FROM=yourgmail@gmail.com
+    volumes:
+      - mdm_data:/data
+      - ./imports:/imports
+
+  web:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://127.0.0.1:5000
+    depends_on:
+      - api
+    command: ["npm","run","dev","--","--host","0.0.0.0","--port","5173"]
+
+  db_init:
+    build: ./backend
+    command: ["python", "-m", "db.init_schema"]
+    environment:
+      - DB_PATH=/data/app.db
+    volumes:
+      - mdm_data:/data
+    
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "worker.worker"]
+    environment:
+      - DB_PATH=/data/app.db
+    volumes:
+      - mdm_data:/data
+    depends_on:
+      - api
+
+volumes:
+  mdm_data:

@@ -1,0 +1,26 @@
+source_id,first_name,last_name,address_line1,address_line2,city,state,zip,country,phone_number,email,created_at,created_by,updated_at,updated_by
+CRM-10001,Emma,Johnson,120 Maple St,Apt 2B,Austin,TX,78701,USA,+1-512-555-0101,emma.johnson@example.com,2026-01-01T09:10:00Z,system,2026-01-20T14:30:00Z,system
+CRM-10002,Liam,Williams,48 Oak Ave,,Denver,CO,80202,USA,+1-303-555-0102,liam.williams@example.com,2026-01-02T10:15:00Z,system,2026-01-18T11:05:00Z,system
+CRM-10003,Olivia,Brown,900 Pine Rd,Unit 7,Seattle,WA,98101,USA,+1-206-555-0103,olivia.brown@example.com,2026-01-03T08:00:00Z,system,2026-01-22T16:45:00Z,system
+CRM-10004,Noah,Jones,15 Cedar Blvd,,Miami,FL,33101,USA,+1-305-555-0104,noah.jones@example.com,2026-01-04T12:20:00Z,system,2026-01-25T09:10:00Z,system
+CRM-10005,Ava,Garcia,210 Birch Ln,Suite 300,Chicago,IL,60601,USA,+1-312-555-0105,ava.garcia@example.com,2026-01-05T07:55:00Z,system,2026-01-27T13:25:00Z,system
+CRM-10006,Elijah,Miller,77 Spruce St,,Boston,MA,02108,USA,+1-617-555-0106,elijah.miller@example.com,2026-01-06T15:05:00Z,system,2026-01-26T10:00:00Z,system
+CRM-10007,Sophia,Davis,8 Elm St,Apt 9C,New York,NY,10001,USA,+1-212-555-0107,sophia.davis@example.com,2026-01-07T09:40:00Z,system,2026-01-19T17:05:00Z,system
+CRM-10008,James,Martinez,310 Willow Way,,San Francisco,CA,94105,USA,+1-415-555-0108,james.martinez@example.com,2026-01-08T11:30:00Z,system,2026-01-24T08:15:00Z,system
+CRM-10009,Isabella,Hernandez,55 Aspen Ct,,Phoenix,AZ,85004,USA,+1-602-555-0109,isabella.hernandez@example.com,2026-01-09T13:10:00Z,system,2026-01-28T12:50:00Z,system
+CRM-10010,Benjamin,Lopez,19 Poplar Pl,Floor 2,Portland,OR,97205,USA,+1-503-555-0110,benjamin.lopez@example.com,2026-01-10T08:25:00Z,system,2026-01-21T15:35:00Z,system
+CRM-10011,Mia,Gonzalez,640 Walnut St,,Atlanta,GA,30303,USA,+1-404-555-0111,mia.gonzalez@example.com,2026-01-11T10:45:00Z,system,2026-01-23T09:55:00Z,system
+CRM-10012,Lucas,Wilson,12 Cherry Dr,Apt 1A,Charlotte,NC,28202,USA,+1-704-555-0112,lucas.wilson@example.com,2026-01-12T16:20:00Z,system,2026-01-29T18:10:00Z,system
+CRM-10013,Amelia,Anderson,85 Magnolia Ave,,Nashville,TN,37203,USA,+1-615-555-0113,amelia.anderson@example.com,2026-01-13T09:05:00Z,system,2026-01-30T10:25:00Z,system
+CRM-10014,Henry,Thomas,5 Redwood Cir,Unit 12,Las Vegas,NV,89101,USA,+1-702-555-0114,henry.thomas@example.com,2026-01-14T14:55:00Z,system,2026-01-28T07:40:00Z,system
+CRM-10015,Harper,Taylor,230 Sequoia St,,Salt Lake City,UT,84101,USA,+1-801-555-0115,harper.taylor@example.com,2026-01-15T07:35:00Z,system,2026-01-22T12:05:00Z,system
+CRM-10016,Evelyn,Moore,99 Lakeview Rd,Apt 4D,Minneapolis,MN,55401,USA,+1-612-555-0116,evelyn.moore@example.com,2026-01-16T12:00:00Z,system,2026-01-27T16:20:00Z,system
+CRM-10017,Alexander,Jackson,410 River St,,Cleveland,OH,44114,USA,+1-216-555-0117,alexander.jackson@example.com,2026-01-17T10:10:00Z,system,2026-01-25T19:10:00Z,system
+CRM-10018,Abigail,Martin,66 Sunset Blvd,Suite 210,Los Angeles,CA,90012,USA,+1-213-555-0118,abigail.martin@example.com,2026-01-18T08:50:00Z,system,2026-01-30T13:45:00Z,system
+CRM-10019,Michael,Lee,7 Harbor Dr,,San Diego,CA,92101,USA,+1-619-555-0119,michael.lee@example.com,2026-01-19T11:15:00Z,system,2026-01-29T09:30:00Z,system
+CRM-10020,Emily,Perez,315 Canyon Rd,,Albuquerque,NM,87102,USA,+1-505-555-0120,emily.perez@example.com,2026-01-20T15:30:00Z,system,2026-01-26T14:10:00Z,system
+CRM-10021,Daniel,Thompson,44 Ridge St,Apt 3E,Philadelphia,PA,19103,USA,+1-215-555-0121,daniel.thompson@example.com,2026-01-21T09:20:00Z,system,2026-01-30T08:05:00Z,system
+CRM-10022,Ella,White,520 Park Ave,,Pittsburgh,PA,15222,USA,+1-412-555-0122,ella.white@example.com,2026-01-22T13:40:00Z,system,2026-01-28T18:20:00Z,system
+CRM-10023,Matthew,Harris,18 Forest Ln,Unit 5,Columbus,OH,43215,USA,+1-614-555-0123,matthew.harris@example.com,2026-01-23T07:10:00Z,system,2026-01-27T09:50:00Z,system
+CRM-10024,Scarlett,Clark,101 Hill St,,Raleigh,NC,27601,USA,+1-919-555-0124,scarlett.clark@example.com,2026-01-24T12:35:00Z,system,2026-01-29T11:25:00Z,system
+CRM-10025,David,Lewis,260 Meadow Rd,Apt 6B,Orlando,FL,32801,USA,+1-407-555-0125,david.lewis@example.com,2026-01-25T16:05:00Z,system,2026-01-30T17:55:00Z,system
