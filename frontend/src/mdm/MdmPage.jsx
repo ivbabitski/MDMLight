@@ -120,8 +120,6 @@ async function fetchSourceInputSummary(appUserId) {
 
   const headers = {
     Accept: "application/json",
-    "Cache-Control": "no-cache",
-    Pragma: "no-cache",
   };
   if (userId) headers["X-User-Id"] = userId;
 
@@ -146,7 +144,6 @@ async function fetchSourceInputSummary(appUserId) {
 
   return res.json();
 }
-
 
 
 export default function MdmPage() {

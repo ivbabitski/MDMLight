@@ -147,6 +147,15 @@ def _normalize_config(cfg: dict, model_name: str) -> dict:
     if not isinstance(fields, list) or len(fields) == 0:
         raise ValueError("config.fields is required (non-empty array)")
 
+    match_field_codes = out.get("matchFieldCodes")
+    match_code_set = None
+    if match_field_codes is not None:
+        if not isinstance(match_field_codes, list) or len(match_field_codes) == 0:
+            raise ValueError("config.matchFieldCodes is required (non-empty array)")
+        match_code_set = {str(c).strip() for c in match_field_codes if str(c).strip()}
+        if len(match_code_set) == 0:
+            raise ValueError("config.matchFieldCodes is required (non-empty array)")
+
     norm_fields = []
     key_count = 0
     match_fields = []
@@ -176,7 +185,10 @@ def _normalize_config(cfg: dict, model_name: str) -> dict:
             ff["weight"] = 0.0
         ff["weight"] = _clamp(ff["weight"], 0.0, 1.0)
 
-        if ff["kind"] == "flex" and ff["include"]:
+        is_match = ff["kind"] == "flex" and ff["include"] and (
+            match_code_set is None or ff["code"] in match_code_set
+        )
+        if is_match:
             try:
                 t = float(ff.get("matchThreshold", 0.8))
             except Exception:
@@ -192,7 +204,10 @@ def _normalize_config(cfg: dict, model_name: str) -> dict:
     if key_count != 1:
         raise ValueError("config.fields must contain exactly one key=true field")
     if len(match_fields) < 1:
-        raise ValueError("config.fields must include at least one flex/include=true match field")
+        if match_code_set is None:
+            raise ValueError("config.fields must include at least one flex/include=true match field")
+        raise ValueError("config.matchFieldCodes must reference at least one flex/include=true field")
+
 
     if not bool(out.get("advanced")):
         gr = str(out.get("globalRule") or "recency_updated_date")
@@ -203,8 +218,8 @@ def _normalize_config(cfg: dict, model_name: str) -> dict:
     total_weight_pct = 0
     for ff in match_fields:
         total_weight_pct += int(round(float(ff.get("weight") or 0.0) * 100.0))
-    if total_weight_pct != 100:
-        raise ValueError(f"match field weights must total 100% (currently {total_weight_pct}%)")
+    if total_weight_pct < 95 or total_weight_pct > 105:
+        raise ValueError(f"match field weights must total ~100% (currently {total_weight_pct}%)")
 
     out["fields"] = norm_fields
     return out

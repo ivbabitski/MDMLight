@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { getUserId, getUserHeaders } from "../authStorage";
+import { getUserId } from "../authStorage";
 
 
 const TYPE_OPTIONS = [
@@ -334,7 +334,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
   const [savingModel, setSavingModel] = useState(false);
   const [saveError, setSaveError] = useState("");
-
+  const [saveSuccess, setSaveSuccess] = useState(null); // { name, id } | null
 
 
   // Step 2 — fields
@@ -357,17 +357,18 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
   const [globalRule, setGlobalRule] = useState("recency_updated_date");
   const PRIORITY_CAP = 15;
 
-  const [systemPriority, setSystemPriority] = useState(
-    ["CRM", "ERP", "Web", "Partner"].slice(0, PRIORITY_CAP)
-  );
+  const [sourceSystemsLoading, setSourceSystemsLoading] = useState(false);
+  const [sourceSystemsError, setSourceSystemsError] = useState("");
+  const [sourceSystemOptions, setSourceSystemOptions] = useState([]);
 
-  const [userPriority, setUserPriority] = useState(
-    ["User A", "User B", "User C", "User D"].slice(0, PRIORITY_CAP)
-  );
+  const [systemPriority, setSystemPriority] = useState([""]);
+  const [userPriority, setUserPriority] = useState([""]);
+
 
   const [specificValuePriority, setSpecificValuePriority] = useState(() => [
     { id: uid("sv"), fieldCode: "", value: "" },
   ]);
+
 
   const [specificValueError, setSpecificValueError] = useState("");
   const specificValueDragFromRef = useRef(null);
@@ -508,10 +509,18 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     return [...req, ...flex, ...res];
   }, [fields]);
 
-  const systemOptions = useMemo(
-    () => Array.from(new Set(systemPriority.map((s) => String(s ?? "").trim()).filter(Boolean))),
-    [systemPriority]
-  );
+  const systemOptions = useMemo(() => {
+    const fromApi = (Array.isArray(sourceSystemOptions) ? sourceSystemOptions : [])
+      .map((s) => String(s ?? "").trim())
+      .filter(Boolean);
+
+    const fromPriority = (Array.isArray(systemPriority) ? systemPriority : [])
+      .map((s) => String(s ?? "").trim())
+      .filter(Boolean);
+
+    return Array.from(new Set([...fromApi, ...fromPriority]));
+  }, [sourceSystemOptions, systemPriority]);
+
 
   const userOptions = useMemo(
     () => Array.from(new Set(userPriority.map((u) => String(u ?? "").trim()).filter(Boolean))),
@@ -551,9 +560,83 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     return raw.endsWith("/") ? raw.slice(0, -1) : raw;
   }, [apiBaseUrl]);
 
+  useEffect(() => {
+    if (!open) return;
+    if (step !== 2) return;
+    if (globalRule !== "system") return;
+
+    const userId = getUserId();
+    if (!userId) {
+      setSourceSystemsError("No user id found in authStorage (treat as logged out)");
+      setSourceSystemOptions([]);
+      return;
+    }
+
+    const url = `${apiBase}/mdm/source-systems?include_stats=0`;
+
+    let cancelled = false;
+
+    setSourceSystemsLoading(true);
+    setSourceSystemsError("");
+
+    (async () => {
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: {
+            "X-User-Id": String(userId),
+          },
+        });
+
+        const out = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          if (!cancelled) {
+            setSourceSystemsError(out?.error || `Source systems load failed (${res.status})`);
+            setSourceSystemOptions([]);
+          }
+          return;
+        }
+
+        const rows = Array.isArray(out?.source_systems) ? out.source_systems : [];
+        const names = rows
+          .map((x) => String(x?.source_system ?? "").trim())
+          .filter(Boolean);
+
+        const uniq = Array.from(new Set(names));
+
+        if (cancelled) return;
+
+        setSourceSystemOptions(uniq);
+
+        setSystemPriority((prev) => {
+          const existing = (Array.isArray(prev) ? prev : [])
+            .map((s) => String(s ?? "").trim())
+            .filter(Boolean);
+
+          if (existing.length > 0) return prev;
+
+          return uniq.length > 0 ? uniq.slice(0, PRIORITY_CAP) : prev;
+        });
+      } catch (e) {
+        if (!cancelled) {
+          setSourceSystemsError(String(e?.message || e));
+          setSourceSystemOptions([]);
+        }
+      } finally {
+        if (!cancelled) setSourceSystemsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, step, globalRule, apiBase, PRIORITY_CAP]);
+
   function buildMdmConfig(effectiveFields) {
     return {
       domainModelName: domainModelName,
+
 
       sourceType: sourceType,
       csvFileName: csvFileName,
@@ -640,7 +723,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...getUserHeaders(),
+          "X-User-Id": String(userId),
         },
         body: JSON.stringify({
           actor,
@@ -648,6 +731,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
           config,
         }),
       });
+
 
       const out = await res.json().catch(() => ({}));
 
@@ -891,13 +975,14 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     });
   }
 
-  function addMatchField() {
-    const code = String(matchFieldPick || "").trim();
+  function addMatchField(nextCode) {
+    const code = String((nextCode ?? matchFieldPick) || "").trim();
     if (!code) return;
 
     setMatchFieldCodes((prev) => (prev.includes(code) ? prev : [...prev, code]));
     setMatchFieldPick("");
   }
+
 
   function removeMatchField(code) {
     setMatchFieldCodes((prev) => prev.filter((c) => c !== code));
@@ -962,16 +1047,33 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
   }
 
   async function finishWizard() {
+    if (!advanced && globalRule === "specific_value_priority") {
+      const invalid = specificValuePriority.some((row) => {
+        const fc = String(row?.fieldCode ?? "");
+        const v = String(row?.value ?? "");
+        return fc.trim().length === 0 || v.trim().length === 0;
+      });
+
+      if (invalid) {
+        setSpecificValueError("Field and Value are required for each row.");
+        return;
+      }
+    }
+
     const saved = await saveMdmModelToApi();
     if (!saved) return;
+
+    const createdName = String(saved?.model_name || domainModelName || "").trim() || "Model";
+    const createdId = saved?.id ?? null;
 
     if (!advanced) {
       setFields((prev) => prev.map((f) => (f.include ? { ...f, rule: globalRule } : f)));
     }
 
     setConfigured(true);
-    onClose?.();
+    setSaveSuccess({ name: createdName, id: createdId });
   }
+
 
 
   async function next() {
@@ -1006,7 +1108,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
         const res = await fetch(url, {
           method: "POST",
           headers: {
-            ...getUserHeaders(),
+            "X-User-Id": String(userId),
           },
           body: fd,
         });
@@ -1585,6 +1687,17 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                           <>
                             <div style={{ height: 12 }} />
                             <div className="mdmLabel">System priority</div>
+
+                            {sourceSystemsLoading && (
+                              <div className="mdmTiny">Loading source systems…</div>
+                            )}
+
+                            {sourceSystemsError && (
+                              <div className="mdmTiny" style={{ color: "var(--coral1)", fontWeight: 900 }}>
+                                {sourceSystemsError}
+                              </div>
+                            )}
+
                             <PriorityPickerList
                               kind="system"
                               items={systemPriority}
@@ -1598,6 +1711,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                             />
                           </>
                         )}
+
 
                         {globalRule === "specific_value_priority" && (
                           <>
@@ -1613,13 +1727,20 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                                     key={row.id}
                                     className="mdmPriorityRow"
                                     onDragOver={(e) => e.preventDefault()}
-                                    onDrop={() => onSpecificValueDrop(idx)}
+                                    onDrop={() => {
+                                      const from = specificValueDragFromRef.current;
+                                      specificValueDragFromRef.current = null;
+                                      if (from === null || from === undefined) return;
+                                      if (from === idx) return;
+                                      setSpecificValueError("");
+                                      setSpecificValuePriority((prev) => reorderArray(prev, from, idx));
+                                    }}
                                   >
                                     <div className="mdmPriorityLeft">
                                       <div
                                         className="mdmDragHandle"
                                         draggable
-                                        onDragStart={() => onSpecificValueDragStart(idx)}
+                                        onDragStart={() => { specificValueDragFromRef.current = idx; }}
                                         onDragEnd={() => { specificValueDragFromRef.current = null; }}
                                         title="Drag to reorder"
                                         aria-label="Drag to reorder"
@@ -1640,7 +1761,13 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                                           <select
                                             className="mdmSelect mdmPriorityPickSelect mdmMono"
                                             value={String(row.fieldCode ?? "")}
-                                            onChange={(e) => pickSpecificValueField(idx, e.target.value)}
+                                            onChange={(e) => {
+                                              const fieldCode = e.target.value;
+                                              setSpecificValueError("");
+                                              setSpecificValuePriority((prev) =>
+                                                prev.map((r, i) => (i === idx ? { ...r, fieldCode } : r))
+                                              );
+                                            }}
                                           >
                                             <option value="">Pick a field…</option>
                                             {fieldOptions.map((f) => {
@@ -1657,7 +1784,13 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                                             className="mdmInput mdmMono"
                                             value={String(row.value ?? "")}
                                             placeholder="Enter exact value…"
-                                            onChange={(e) => setSpecificValueRowValue(idx, e.target.value)}
+                                            onChange={(e) => {
+                                              const value = e.target.value;
+                                              setSpecificValueError("");
+                                              setSpecificValuePriority((prev) =>
+                                                prev.map((r, i) => (i === idx ? { ...r, value } : r))
+                                              );
+                                            }}
                                           />
                                         </div>
                                       </div>
@@ -1667,7 +1800,13 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                                       <button
                                         className="mdmBtn mdmIconBtn mdmBtn--ghost"
                                         type="button"
-                                        onClick={() => removeSpecificValueRow(idx)}
+                                        onClick={() => {
+                                          setSpecificValueError("");
+                                          setSpecificValuePriority((prev) => {
+                                            const next = prev.filter((_, i) => i !== idx);
+                                            return next.length ? next : [{ id: uid("sv"), fieldCode: "", value: "" }];
+                                          });
+                                        }}
                                         disabled={specificValuePriority.length <= 1}
                                         aria-label="Remove"
                                         title="Remove"
@@ -1687,7 +1826,13 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                               <button
                                 className="mdmBtn mdmBtn--soft mdmBtn--small"
                                 type="button"
-                                onClick={addSpecificValueRow}
+                                onClick={() => {
+                                  setSpecificValueError("");
+                                  setSpecificValuePriority((prev) => {
+                                    if (prev.length >= PRIORITY_CAP) return prev;
+                                    return [...prev, { id: uid("sv"), fieldCode: "", value: "" }];
+                                  });
+                                }}
                                 disabled={specificValuePriority.length >= PRIORITY_CAP}
                                 title={specificValuePriority.length >= PRIORITY_CAP ? `Max ${PRIORITY_CAP}` : "Add"}
                               >
@@ -1702,6 +1847,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                             )}
                           </>
                         )}
+
                       </>
                     ) : (
                       <>
@@ -1764,7 +1910,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                       <select
                         className="mdmSelect"
                         value={matchFieldPick}
-                        onChange={(e) => setMatchFieldPick(e.target.value)}
+                        onChange={(e) => addMatchField(e.target.value)}
                       >
                         <option value="">Select a field…</option>
                         {matchFieldOptions.map((f) => (
@@ -1774,21 +1920,12 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                         ))}
                       </select>
                     </div>
-
-                    <button
-                      className="mdmBtn mdmBtn--soft"
-                      type="button"
-                      onClick={addMatchField}
-                      disabled={!matchFieldPick}
-                    >
-                      Add match field
-                    </button>
                   </div>
 
                   <div style={{ height: 10 }} />
 
                   {matchFields.length === 0 ? (
-                    <div className="mdmTiny">No match fields selected. Add a match field above.</div>
+                    <div className="mdmTiny">No match fields selected. Select a match field above.</div>
                   ) : (
                     <>
                       <div className="mdmPerFieldHeader">
@@ -1796,6 +1933,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                         <div className="mdmTiny mdmPerFieldHeaderLabel">Match %</div>
                         <div className="mdmTiny mdmPerFieldHeaderLabel">Weight</div>
                         <div aria-hidden="true" />
+
 
                         <div
                           className="mdmTiny mdmPerFieldTotalWeight"
@@ -1977,6 +2115,70 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
         </div>
       </div>
 
+      {saveSuccess && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: 520,
+              maxWidth: "calc(100vw - 32px)",
+              background: "#fff",
+              borderRadius: 12,
+              overflow: "hidden",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div
+              style={{
+                background: "var(--coral1)",
+                color: "#fff",
+                padding: "12px 14px",
+                fontWeight: 900,
+              }}
+            >
+              MDM Light
+            </div>
+
+            <div style={{ padding: 14 }}>
+              <div style={{ marginBottom: 14, lineHeight: 1.35 }}>
+                ✅ Model created: <span className="mdmMono">{saveSuccess.name}</span>
+                {saveSuccess.id != null && String(saveSuccess.id).trim() !== "" ? (
+                  <>
+                    {" "}
+                    (id: <span className="mdmMono">{String(saveSuccess.id)}</span>)
+                  </>
+                ) : null}
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button
+                  className="mdmBtn mdmBtn--primary"
+                  type="button"
+                  onClick={() => {
+                    setSaveSuccess(null);
+                    onClose?.();
+                  }}
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <input
         ref={fileRef}
         type="file"
@@ -1984,6 +2186,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
         onChange={onCsvPicked}
         style={{ display: "none" }}
       />
+
     </div>
   );
 }

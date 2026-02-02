@@ -10,7 +10,13 @@ os.makedirs(STORAGE_PATH, exist_ok=True)
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    CORS(app)
+    CORS(
+        app,
+        resources={r"/*": {"origins": "*"}},
+        allow_headers=["Content-Type", "X-User-Id"],
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
+
 
     # Register APIs (keep app.py as the central register)
     from apis.system_api import bp as system_bp
@@ -20,7 +26,7 @@ def create_app() -> Flask:
     from apis.auth_api import bp as auth_bp
     from apis.mdm_model_api import bp as mdm_model_bp
     from apis.source_input_api import bp as source_input_bp
-    #from apis.source_systems_api import bp as source_systems_bp
+    from apis.source_systems_api import bp as source_systems_bp
 
     app.register_blueprint(system_bp)
     app.register_blueprint(ingestion_bp)
@@ -29,7 +35,7 @@ def create_app() -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(mdm_model_bp)
     app.register_blueprint(source_input_bp)
-    #app.register_blueprint(source_systems_bp)
+    app.register_blueprint(source_systems_bp)
 
     return app
 
@@ -37,4 +43,5 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+
 

@@ -1,0 +1,594 @@
+[1mdiff --git a/backend/apis/mdm_model_api.py b/backend/apis/mdm_model_api.py[m
+[1mindex 0ece565..9e37539 100644[m
+[1m--- a/backend/apis/mdm_model_api.py[m
+[1m+++ b/backend/apis/mdm_model_api.py[m
+[36m@@ -147,6 +147,15 @@[m [mdef _normalize_config(cfg: dict, model_name: str) -> dict:[m
+     if not isinstance(fields, list) or len(fields) == 0:[m
+         raise ValueError("config.fields is required (non-empty array)")[m
+ [m
+[32m+[m[32m    match_field_codes = out.get("matchFieldCodes")[m
+[32m+[m[32m    match_code_set = None[m
+[32m+[m[32m    if match_field_codes is not None:[m
+[32m+[m[32m        if not isinstance(match_field_codes, list) or len(match_field_codes) == 0:[m
+[32m+[m[32m            raise ValueError("config.matchFieldCodes is required (non-empty array)")[m
+[32m+[m[32m        match_code_set = {str(c).strip() for c in match_field_codes if str(c).strip()}[m
+[32m+[m[32m        if len(match_code_set) == 0:[m
+[32m+[m[32m            raise ValueError("config.matchFieldCodes is required (non-empty array)")[m
+[32m+[m
+     norm_fields = [][m
+     key_count = 0[m
+     match_fields = [][m
+[36m@@ -176,7 +185,10 @@[m [mdef _normalize_config(cfg: dict, model_name: str) -> dict:[m
+             ff["weight"] = 0.0[m
+         ff["weight"] = _clamp(ff["weight"], 0.0, 1.0)[m
+ [m
+[31m-        if ff["kind"] == "flex" and ff["include"]:[m
+[32m+[m[32m        is_match = ff["kind"] == "flex" and ff["include"] and ([m
+[32m+[m[32m            match_code_set is None or ff["code"] in match_code_set[m
+[32m+[m[32m        )[m
+[32m+[m[32m        if is_match:[m
+             try:[m
+                 t = float(ff.get("matchThreshold", 0.8))[m
+             except Exception:[m
+[36m@@ -192,7 +204,10 @@[m [mdef _normalize_config(cfg: dict, model_name: str) -> dict:[m
+     if key_count != 1:[m
+         raise ValueError("config.fields must contain exactly one key=true field")[m
+     if len(match_fields) < 1:[m
+[31m-        raise ValueError("config.fields must include at least one flex/include=true match field")[m
+[32m+[m[32m        if match_code_set is None:[m
+[32m+[m[32m            raise ValueError("config.fields must include at least one flex/include=true match field")[m
+[32m+[m[32m        raise ValueError("config.matchFieldCodes must reference at least one flex/include=true field")[m
+[32m+[m
+ [m
+     if not bool(out.get("advanced")):[m
+         gr = str(out.get("globalRule") or "recency_updated_date")[m
+[36m@@ -203,8 +218,8 @@[m [mdef _normalize_config(cfg: dict, model_name: str) -> dict:[m
+     total_weight_pct = 0[m
+     for ff in match_fields:[m
+         total_weight_pct += int(round(float(ff.get("weight") or 0.0) * 100.0))[m
+[31m-    if total_weight_pct != 100:[m
+[31m-        raise ValueError(f"match field weights must total 100% (currently {total_weight_pct}%)")[m
+[32m+[m[32m    if total_weight_pct < 95 or total_weight_pct > 105:[m
+[32m+[m[32m        raise ValueError(f"match field weights must total ~100% (currently {total_weight_pct}%)")[m
+ [m
+     out["fields"] = norm_fields[m
+     return out[m
+[1mdiff --git a/backend/app.py b/backend/app.py[m
+[1mindex a0bd082..e399adc 100644[m
+[1m--- a/backend/app.py[m
+[1m+++ b/backend/app.py[m
+[36m@@ -10,7 +10,13 @@[m [mos.makedirs(STORAGE_PATH, exist_ok=True)[m
+ [m
+ def create_app() -> Flask:[m
+     app = Flask(__name__)[m
+[31m-    CORS(app)[m
+[32m+[m[32m    CORS([m[41m[m
+[32m+[m[32m        app,[m[41m[m
+[32m+[m[32m        resources={r"/*": {"origins": "*"}},[m[41m[m
+[32m+[m[32m        allow_headers=["Content-Type", "X-User-Id"],[m[41m[m
+[32m+[m[32m        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],[m[41m[m
+[32m+[m[32m    )[m[41m[m
+[32m+[m[41m[m
+ [m
+     # Register APIs (keep app.py as the central register)[m
+     from apis.system_api import bp as system_bp[m
+[36m@@ -20,7 +26,7 @@[m [mdef create_app() -> Flask:[m
+     from apis.auth_api import bp as auth_bp[m
+     from apis.mdm_model_api import bp as mdm_model_bp[m
+     from apis.source_input_api import bp as source_input_bp[m
+[31m-    #from apis.source_systems_api import bp as source_systems_bp[m
+[32m+[m[32m    from apis.source_systems_api import bp as source_systems_bp[m[41m[m
+ [m
+     app.register_blueprint(system_bp)[m
+     app.register_blueprint(ingestion_bp)[m
+[36m@@ -29,7 +35,7 @@[m [mdef create_app() -> Flask:[m
+     app.register_blueprint(auth_bp)[m
+     app.register_blueprint(mdm_model_bp)[m
+     app.register_blueprint(source_input_bp)[m
+[31m-    #app.register_blueprint(source_systems_bp)[m
+[32m+[m[32m    app.register_blueprint(source_systems_bp)[m[41m[m
+ [m
+     return app[m
+ [m
+[36m@@ -38,3 +44,4 @@[m [mapp = create_app()[m
+ if __name__ == "__main__":[m
+     app.run(host="0.0.0.0", port=5000)[m
+ [m
+[41m+[m
+[1mdiff --git a/frontend/public/Logo.png b/frontend/public/Logo.png[m
+[1mindex b69f6b2..7c6c313 100644[m
+Binary files a/frontend/public/Logo.png and b/frontend/public/Logo.png differ
+[1mdiff --git a/frontend/src/mdm/MdmPage.jsx b/frontend/src/mdm/MdmPage.jsx[m
+[1mindex 02d3dc5..86545c3 100644[m
+[1m--- a/frontend/src/mdm/MdmPage.jsx[m
+[1m+++ b/frontend/src/mdm/MdmPage.jsx[m
+[36m@@ -120,8 +120,6 @@[m [masync function fetchSourceInputSummary(appUserId) {[m
+ [m
+   const headers = {[m
+     Accept: "application/json",[m
+[31m-    "Cache-Control": "no-cache",[m
+[31m-    Pragma: "no-cache",[m
+   };[m
+   if (userId) headers["X-User-Id"] = userId;[m
+ [m
+[36m@@ -148,7 +146,6 @@[m [masync function fetchSourceInputSummary(appUserId) {[m
+ }[m
+ [m
+ [m
+[31m-[m
+ export default function MdmPage() {[m
+ [m
+ [m
+[1mdiff --git a/frontend/src/mdm/MdmWizard.jsx b/frontend/src/mdm/MdmWizard.jsx[m
+[1mindex 672c3c2..b6bd493 100644[m
+[1m--- a/frontend/src/mdm/MdmWizard.jsx[m
+[1m+++ b/frontend/src/mdm/MdmWizard.jsx[m
+[36m@@ -1,7 +1,7 @@[m
+ "use client";[m
+ [m
+ import React, { useEffect, useMemo, useRef, useState } from "react";[m
+[31m-import { getUserId, getUserHeaders } from "../authStorage";[m
+[32m+[m[32mimport { getUserId } from "../authStorage";[m
+ [m
+ [m
+ const TYPE_OPTIONS = [[m
+[36m@@ -334,7 +334,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+ [m
+   const [savingModel, setSavingModel] = useState(false);[m
+   const [saveError, setSaveError] = useState("");[m
+[31m-[m
+[32m+[m[32m  const [saveSuccess, setSaveSuccess] = useState(null); // { name, id } | null[m
+ [m
+ [m
+   // Step 2 — fields[m
+[36m@@ -357,18 +357,19 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+   const [globalRule, setGlobalRule] = useState("recency_updated_date");[m
+   const PRIORITY_CAP = 15;[m
+ [m
+[31m-  const [systemPriority, setSystemPriority] = useState([m
+[31m-    ["CRM", "ERP", "Web", "Partner"].slice(0, PRIORITY_CAP)[m
+[31m-  );[m
+[32m+[m[32m  const [sourceSystemsLoading, setSourceSystemsLoading] = useState(false);[m
+[32m+[m[32m  const [sourceSystemsError, setSourceSystemsError] = useState("");[m
+[32m+[m[32m  const [sourceSystemOptions, setSourceSystemOptions] = useState([]);[m
+[32m+[m
+[32m+[m[32m  const [systemPriority, setSystemPriority] = useState([""]);[m
+[32m+[m[32m  const [userPriority, setUserPriority] = useState([""]);[m
+ [m
+[31m-  const [userPriority, setUserPriority] = useState([m
+[31m-    ["User A", "User B", "User C", "User D"].slice(0, PRIORITY_CAP)[m
+[31m-  );[m
+ [m
+   const [specificValuePriority, setSpecificValuePriority] = useState(() => [[m
+     { id: uid("sv"), fieldCode: "", value: "" },[m
+   ]);[m
+ [m
+[32m+[m
+   const [specificValueError, setSpecificValueError] = useState("");[m
+   const specificValueDragFromRef = useRef(null);[m
+ [m
+[36m@@ -508,10 +509,18 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+     return [...req, ...flex, ...res];[m
+   }, [fields]);[m
+ [m
+[31m-  const systemOptions = useMemo([m
+[31m-    () => Array.from(new Set(systemPriority.map((s) => String(s ?? "").trim()).filter(Boolean))),[m
+[31m-    [systemPriority][m
+[31m-  );[m
+[32m+[m[32m  const systemOptions = useMemo(() => {[m
+[32m+[m[32m    const fromApi = (Array.isArray(sourceSystemOptions) ? sourceSystemOptions : [])[m
+[32m+[m[32m      .map((s) => String(s ?? "").trim())[m
+[32m+[m[32m      .filter(Boolean);[m
+[32m+[m
+[32m+[m[32m    const fromPriority = (Array.isArray(systemPriority) ? systemPriority : [])[m
+[32m+[m[32m      .map((s) => String(s ?? "").trim())[m
+[32m+[m[32m      .filter(Boolean);[m
+[32m+[m
+[32m+[m[32m    return Array.from(new Set([...fromApi, ...fromPriority]));[m
+[32m+[m[32m  }, [sourceSystemOptions, systemPriority]);[m
+[32m+[m
+ [m
+   const userOptions = useMemo([m
+     () => Array.from(new Set(userPriority.map((u) => String(u ?? "").trim()).filter(Boolean))),[m
+[36m@@ -551,10 +560,84 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+     return raw.endsWith("/") ? raw.slice(0, -1) : raw;[m
+   }, [apiBaseUrl]);[m
+ [m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    if (!open) return;[m
+[32m+[m[32m    if (step !== 2) return;[m
+[32m+[m[32m    if (globalRule !== "system") return;[m
+[32m+[m
+[32m+[m[32m    const userId = getUserId();[m
+[32m+[m[32m    if (!userId) {[m
+[32m+[m[32m      setSourceSystemsError("No user id found in authStorage (treat as logged out)");[m
+[32m+[m[32m      setSourceSystemOptions([]);[m
+[32m+[m[32m      return;[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    const url = `${apiBase}/mdm/source-systems?include_stats=0`;[m
+[32m+[m
+[32m+[m[32m    let cancelled = false;[m
+[32m+[m
+[32m+[m[32m    setSourceSystemsLoading(true);[m
+[32m+[m[32m    setSourceSystemsError("");[m
+[32m+[m
+[32m+[m[32m    (async () => {[m
+[32m+[m[32m      try {[m
+[32m+[m[32m        const res = await fetch(url, {[m
+[32m+[m[32m          method: "GET",[m
+[32m+[m[32m          headers: {[m
+[32m+[m[32m            "X-User-Id": String(userId),[m
+[32m+[m[32m          },[m
+[32m+[m[32m        });[m
+[32m+[m
+[32m+[m[32m        const out = await res.json().catch(() => ({}));[m
+[32m+[m
+[32m+[m[32m        if (!res.ok) {[m
+[32m+[m[32m          if (!cancelled) {[m
+[32m+[m[32m            setSourceSystemsError(out?.error || `Source systems load failed (${res.status})`);[m
+[32m+[m[32m            setSourceSystemOptions([]);[m
+[32m+[m[32m          }[m
+[32m+[m[32m          return;[m
+[32m+[m[32m        }[m
+[32m+[m
+[32m+[m[32m        const rows = Array.isArray(out?.source_systems) ? out.source_systems : [];[m
+[32m+[m[32m        const names = rows[m
+[32m+[m[32m          .map((x) => String(x?.source_system ?? "").trim())[m
+[32m+[m[32m          .filter(Boolean);[m
+[32m+[m
+[32m+[m[32m        const uniq = Array.from(new Set(names));[m
+[32m+[m
+[32m+[m[32m        if (cancelled) return;[m
+[32m+[m
+[32m+[m[32m        setSourceSystemOptions(uniq);[m
+[32m+[m
+[32m+[m[32m        setSystemPriority((prev) => {[m
+[32m+[m[32m          const existing = (Array.isArray(prev) ? prev : [])[m
+[32m+[m[32m            .map((s) => String(s ?? "").trim())[m
+[32m+[m[32m            .filter(Boolean);[m
+[32m+[m
+[32m+[m[32m          if (existing.length > 0) return prev;[m
+[32m+[m
+[32m+[m[32m          return uniq.length > 0 ? uniq.slice(0, PRIORITY_CAP) : prev;[m
+[32m+[m[32m        });[m
+[32m+[m[32m      } catch (e) {[m
+[32m+[m[32m        if (!cancelled) {[m
+[32m+[m[32m          setSourceSystemsError(String(e?.message || e));[m
+[32m+[m[32m          setSourceSystemOptions([]);[m
+[32m+[m[32m        }[m
+[32m+[m[32m      } finally {[m
+[32m+[m[32m        if (!cancelled) setSourceSystemsLoading(false);[m
+[32m+[m[32m      }[m
+[32m+[m[32m    })();[m
+[32m+[m
+[32m+[m[32m    return () => {[m
+[32m+[m[32m      cancelled = true;[m
+[32m+[m[32m    };[m
+[32m+[m[32m  }, [open, step, globalRule, apiBase, PRIORITY_CAP]);[m
+[32m+[m
+   function buildMdmConfig(effectiveFields) {[m
+     return {[m
+       domainModelName: domainModelName,[m
+ [m
+[32m+[m
+       sourceType: sourceType,[m
+       csvFileName: csvFileName,[m
+       recordCount: recordCount,[m
+[36m@@ -640,7 +723,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+         method: "POST",[m
+         headers: {[m
+           "Content-Type": "application/json",[m
+[31m-          ...getUserHeaders(),[m
+[32m+[m[32m          "X-User-Id": String(userId),[m
+         },[m
+         body: JSON.stringify({[m
+           actor,[m
+[36m@@ -649,6 +732,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+         }),[m
+       });[m
+ [m
+[32m+[m
+       const out = await res.json().catch(() => ({}));[m
+ [m
+       if (!res.ok) {[m
+[36m@@ -891,14 +975,15 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+     });[m
+   }[m
+ [m
+[31m-  function addMatchField() {[m
+[31m-    const code = String(matchFieldPick || "").trim();[m
+[32m+[m[32m  function addMatchField(nextCode) {[m
+[32m+[m[32m    const code = String((nextCode ?? matchFieldPick) || "").trim();[m
+     if (!code) return;[m
+ [m
+     setMatchFieldCodes((prev) => (prev.includes(code) ? prev : [...prev, code]));[m
+     setMatchFieldPick("");[m
+   }[m
+ [m
+[32m+[m
+   function removeMatchField(code) {[m
+     setMatchFieldCodes((prev) => prev.filter((c) => c !== code));[m
+     setMatchFieldPick((prev) => (prev === code ? "" : prev));[m
+[36m@@ -962,18 +1047,35 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+   }[m
+ [m
+   async function finishWizard() {[m
+[32m+[m[32m    if (!advanced && globalRule === "specific_value_priority") {[m
+[32m+[m[32m      const invalid = specificValuePriority.some((row) => {[m
+[32m+[m[32m        const fc = String(row?.fieldCode ?? "");[m
+[32m+[m[32m        const v = String(row?.value ?? "");[m
+[32m+[m[32m        return fc.trim().length === 0 || v.trim().length === 0;[m
+[32m+[m[32m      });[m
+[32m+[m
+[32m+[m[32m      if (invalid) {[m
+[32m+[m[32m        setSpecificValueError("Field and Value are required for each row.");[m
+[32m+[m[32m        return;[m
+[32m+[m[32m      }[m
+[32m+[m[32m    }[m
+[32m+[m
+     const saved = await saveMdmModelToApi();[m
+     if (!saved) return;[m
+ [m
+[32m+[m[32m    const createdName = String(saved?.model_name || domainModelName || "").trim() || "Model";[m
+[32m+[m[32m    const createdId = saved?.id ?? null;[m
+[32m+[m
+     if (!advanced) {[m
+       setFields((prev) => prev.map((f) => (f.include ? { ...f, rule: globalRule } : f)));[m
+     }[m
+ [m
+     setConfigured(true);[m
+[31m-    onClose?.();[m
+[32m+[m[32m    setSaveSuccess({ name: createdName, id: createdId });[m
+   }[m
+ [m
+ [m
+[32m+[m
+   async function next() {[m
+     if (step === 0 && !step1Ok) return;[m
+     if (step === 1 && !step2Ok) return;[m
+[36m@@ -1006,7 +1108,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+         const res = await fetch(url, {[m
+           method: "POST",[m
+           headers: {[m
+[31m-            ...getUserHeaders(),[m
+[32m+[m[32m            "X-User-Id": String(userId),[m
+           },[m
+           body: fd,[m
+         });[m
+[36m@@ -1585,6 +1687,17 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                           <>[m
+                             <div style={{ height: 12 }} />[m
+                             <div className="mdmLabel">System priority</div>[m
+[32m+[m
+[32m+[m[32m                            {sourceSystemsLoading && ([m
+[32m+[m[32m                              <div className="mdmTiny">Loading source systems…</div>[m
+[32m+[m[32m                            )}[m
+[32m+[m
+[32m+[m[32m                            {sourceSystemsError && ([m
+[32m+[m[32m                              <div className="mdmTiny" style={{ color: "var(--coral1)", fontWeight: 900 }}>[m
+[32m+[m[32m                                {sourceSystemsError}[m
+[32m+[m[32m                              </div>[m
+[32m+[m[32m                            )}[m
+[32m+[m
+                             <PriorityPickerList[m
+                               kind="system"[m
+                               items={systemPriority}[m
+[36m@@ -1599,6 +1712,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                           </>[m
+                         )}[m
+ [m
+[32m+[m
+                         {globalRule === "specific_value_priority" && ([m
+                           <>[m
+                             <div style={{ height: 12 }} />[m
+[36m@@ -1613,13 +1727,20 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                                     key={row.id}[m
+                                     className="mdmPriorityRow"[m
+                                     onDragOver={(e) => e.preventDefault()}[m
+[31m-                                    onDrop={() => onSpecificValueDrop(idx)}[m
+[32m+[m[32m                                    onDrop={() => {[m
+[32m+[m[32m                                      const from = specificValueDragFromRef.current;[m
+[32m+[m[32m                                      specificValueDragFromRef.current = null;[m
+[32m+[m[32m                                      if (from === null || from === undefined) return;[m
+[32m+[m[32m                                      if (from === idx) return;[m
+[32m+[m[32m                                      setSpecificValueError("");[m
+[32m+[m[32m                                      setSpecificValuePriority((prev) => reorderArray(prev, from, idx));[m
+[32m+[m[32m                                    }}[m
+                                   >[m
+                                     <div className="mdmPriorityLeft">[m
+                                       <div[m
+                                         className="mdmDragHandle"[m
+                                         draggable[m
+[31m-                                        onDragStart={() => onSpecificValueDragStart(idx)}[m
+[32m+[m[32m                                        onDragStart={() => { specificValueDragFromRef.current = idx; }}[m
+                                         onDragEnd={() => { specificValueDragFromRef.current = null; }}[m
+                                         title="Drag to reorder"[m
+                                         aria-label="Drag to reorder"[m
+[36m@@ -1640,7 +1761,13 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                                           <select[m
+                                             className="mdmSelect mdmPriorityPickSelect mdmMono"[m
+                                             value={String(row.fieldCode ?? "")}[m
+[31m-                                            onChange={(e) => pickSpecificValueField(idx, e.target.value)}[m
+[32m+[m[32m                                            onChange={(e) => {[m
+[32m+[m[32m                                              const fieldCode = e.target.value;[m
+[32m+[m[32m                                              setSpecificValueError("");[m
+[32m+[m[32m                                              setSpecificValuePriority((prev) =>[m
+[32m+[m[32m                                                prev.map((r, i) => (i === idx ? { ...r, fieldCode } : r))[m
+[32m+[m[32m                                              );[m
+[32m+[m[32m                                            }}[m
+                                           >[m
+                                             <option value="">Pick a field…</option>[m
+                                             {fieldOptions.map((f) => {[m
+[36m@@ -1657,7 +1784,13 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                                             className="mdmInput mdmMono"[m
+                                             value={String(row.value ?? "")}[m
+                                             placeholder="Enter exact value…"[m
+[31m-                                            onChange={(e) => setSpecificValueRowValue(idx, e.target.value)}[m
+[32m+[m[32m                                            onChange={(e) => {[m
+[32m+[m[32m                                              const value = e.target.value;[m
+[32m+[m[32m                                              setSpecificValueError("");[m
+[32m+[m[32m                                              setSpecificValuePriority((prev) =>[m
+[32m+[m[32m                                                prev.map((r, i) => (i === idx ? { ...r, value } : r))[m
+[32m+[m[32m                                              );[m
+[32m+[m[32m                                            }}[m
+                                           />[m
+                                         </div>[m
+                                       </div>[m
+[36m@@ -1667,7 +1800,13 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                                       <button[m
+                                         className="mdmBtn mdmIconBtn mdmBtn--ghost"[m
+                                         type="button"[m
+[31m-                                        onClick={() => removeSpecificValueRow(idx)}[m
+[32m+[m[32m                                        onClick={() => {[m
+[32m+[m[32m                                          setSpecificValueError("");[m
+[32m+[m[32m                                          setSpecificValuePriority((prev) => {[m
+[32m+[m[32m                                            const next = prev.filter((_, i) => i !== idx);[m
+[32m+[m[32m                                            return next.length ? next : [{ id: uid("sv"), fieldCode: "", value: "" }];[m
+[32m+[m[32m                                          });[m
+[32m+[m[32m                                        }}[m
+                                         disabled={specificValuePriority.length <= 1}[m
+                                         aria-label="Remove"[m
+                                         title="Remove"[m
+[36m@@ -1687,7 +1826,13 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                               <button[m
+                                 className="mdmBtn mdmBtn--soft mdmBtn--small"[m
+                                 type="button"[m
+[31m-                                onClick={addSpecificValueRow}[m
+[32m+[m[32m                                onClick={() => {[m
+[32m+[m[32m                                  setSpecificValueError("");[m
+[32m+[m[32m                                  setSpecificValuePriority((prev) => {[m
+[32m+[m[32m                                    if (prev.length >= PRIORITY_CAP) return prev;[m
+[32m+[m[32m                                    return [...prev, { id: uid("sv"), fieldCode: "", value: "" }];[m
+[32m+[m[32m                                  });[m
+[32m+[m[32m                                }}[m
+                                 disabled={specificValuePriority.length >= PRIORITY_CAP}[m
+                                 title={specificValuePriority.length >= PRIORITY_CAP ? `Max ${PRIORITY_CAP}` : "Add"}[m
+                               >[m
+[36m@@ -1702,6 +1847,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                             )}[m
+                           </>[m
+                         )}[m
+[32m+[m
+                       </>[m
+                     ) : ([m
+                       <>[m
+[36m@@ -1764,7 +1910,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                       <select[m
+                         className="mdmSelect"[m
+                         value={matchFieldPick}[m
+[31m-                        onChange={(e) => setMatchFieldPick(e.target.value)}[m
+[32m+[m[32m                        onChange={(e) => addMatchField(e.target.value)}[m
+                       >[m
+                         <option value="">Select a field…</option>[m
+                         {matchFieldOptions.map((f) => ([m
+[36m@@ -1774,21 +1920,12 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                         ))}[m
+                       </select>[m
+                     </div>[m
+[31m-[m
+[31m-                    <button[m
+[31m-                      className="mdmBtn mdmBtn--soft"[m
+[31m-                      type="button"[m
+[31m-                      onClick={addMatchField}[m
+[31m-                      disabled={!matchFieldPick}[m
+[31m-                    >[m
+[31m-                      Add match field[m
+[31m-                    </button>[m
+                   </div>[m
+ [m
+                   <div style={{ height: 10 }} />[m
+ [m
+                   {matchFields.length === 0 ? ([m
+[31m-                    <div className="mdmTiny">No match fields selected. Add a match field above.</div>[m
+[32m+[m[32m                    <div className="mdmTiny">No match fields selected. Select a match field above.</div>[m
+                   ) : ([m
+                     <>[m
+                       <div className="mdmPerFieldHeader">[m
+[36m@@ -1797,6 +1934,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+                         <div className="mdmTiny mdmPerFieldHeaderLabel">Weight</div>[m
+                         <div aria-hidden="true" />[m
+ [m
+[32m+[m
+                         <div[m
+                           className="mdmTiny mdmPerFieldTotalWeight"[m
+                           style={totalWeightPct === 100 ? undefined : { color: "var(--coral1)", fontWeight: 900 }}[m
+[36m@@ -1977,6 +2115,70 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+         </div>[m
+       </div>[m
+ [m
+[32m+[m[32m      {saveSuccess && ([m
+[32m+[m[32m        <div[m
+[32m+[m[32m          role="dialog"[m
+[32m+[m[32m          aria-modal="true"[m
+[32m+[m[32m          style={{[m
+[32m+[m[32m            position: "fixed",[m
+[32m+[m[32m            inset: 0,[m
+[32m+[m[32m            background: "rgba(0,0,0,0.55)",[m
+[32m+[m[32m            display: "flex",[m
+[32m+[m[32m            alignItems: "center",[m
+[32m+[m[32m            justifyContent: "center",[m
+[32m+[m[32m            zIndex: 10000,[m
+[32m+[m[32m            padding: 16,[m
+[32m+[m[32m          }}[m
+[32m+[m[32m        >[m
+[32m+[m[32m          <div[m
+[32m+[m[32m            style={{[m
+[32m+[m[32m              width: 520,[m
+[32m+[m[32m              maxWidth: "calc(100vw - 32px)",[m
+[32m+[m[32m              background: "#fff",[m
+[32m+[m[32m              borderRadius: 12,[m
+[32m+[m[32m              overflow: "hidden",[m
+[32m+[m[32m              boxShadow: "0 24px 80px rgba(0,0,0,0.35)",[m
+[32m+[m[32m            }}[m
+[32m+[m[32m          >[m
+[32m+[m[32m            <div[m
+[32m+[m[32m              style={{[m
+[32m+[m[32m                background: "var(--coral1)",[m
+[32m+[m[32m                color: "#fff",[m
+[32m+[m[32m                padding: "12px 14px",[m
+[32m+[m[32m                fontWeight: 900,[m
+[32m+[m[32m              }}[m
+[32m+[m[32m            >[m
+[32m+[m[32m              MDM Light[m
+[32m+[m[32m            </div>[m
+[32m+[m
+[32m+[m[32m            <div style={{ padding: 14 }}>[m
+[32m+[m[32m              <div style={{ marginBottom: 14, lineHeight: 1.35 }}>[m
+[32m+[m[32m                ✅ Model created: <span className="mdmMono">{saveSuccess.name}</span>[m
+[32m+[m[32m                {saveSuccess.id != null && String(saveSuccess.id).trim() !== "" ? ([m
+[32m+[m[32m                  <>[m
+[32m+[m[32m                    {" "}[m
+[32m+[m[32m                    (id: <span className="mdmMono">{String(saveSuccess.id)}</span>)[m
+[32m+[m[32m                  </>[m
+[32m+[m[32m                ) : null}[m
+[32m+[m[32m              </div>[m
+[32m+[m
+[32m+[m[32m              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>[m
+[32m+[m[32m                <button[m
+[32m+[m[32m                  className="mdmBtn mdmBtn--primary"[m
+[32m+[m[32m                  type="button"[m
+[32m+[m[32m                  onClick={() => {[m
+[32m+[m[32m                    setSaveSuccess(null);[m
+[32m+[m[32m                    onClose?.();[m
+[32m+[m[32m                  }}[m
+[32m+[m[32m                >[m
+[32m+[m[32m                  OK[m
+[32m+[m[32m                </button>[m
+[32m+[m[32m              </div>[m
+[32m+[m[32m            </div>[m
+[32m+[m[32m          </div>[m
+[32m+[m[32m        </div>[m
+[32m+[m[32m      )}[m
+[32m+[m
+       <input[m
+         ref={fileRef}[m
+         type="file"[m
+[36m@@ -1984,6 +2186,7 @@[m [mexport default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl[m
+         onChange={onCsvPicked}[m
+         style={{ display: "none" }}[m
+       />[m
+[32m+[m
+     </div>[m
+   );[m
+ }[m
