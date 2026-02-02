@@ -264,17 +264,19 @@ function PriorityPickerList({
         })}
       </div>
 
-      <div className="mdmPriorityAddRow">
-        <button
-          className="mdmBtn mdmBtn--soft mdmBtn--small"
-          type="button"
-          onClick={onAdd}
-          disabled={items.length >= cap}
-          title={items.length >= cap ? `Max ${cap}` : "Add"}
-        >
-          Add {kind === "user" ? "user" : "system"}
-        </button>
-      </div>
+      {kind !== "system" && (
+        <div className="mdmPriorityAddRow">
+          <button
+            className="mdmBtn mdmBtn--soft mdmBtn--small"
+            type="button"
+            onClick={onAdd}
+            disabled={items.length >= cap}
+            title={items.length >= cap ? `Max ${cap}` : "Add"}
+          >
+            Add {kind === "user" ? "user" : "system"}
+          </button>
+        </div>
+      )}
     </>
   );
 }
@@ -673,7 +675,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
         key: !!f.key,
         type: f.type,
 
-        weight: Number(f.weight) || 0,
+        weight: matchFieldCodes.includes(f.code) ? (Number(f.weight) || 0) : 0,
 
         rule: f.rule,
 
@@ -1047,6 +1049,11 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
   }
 
   async function finishWizard() {
+    if (!step3Ok) {
+      setSaveError("Select at least 1 match field");
+      return;
+    }
+
     if (!advanced && globalRule === "specific_value_priority") {
       const invalid = specificValuePriority.some((row) => {
         const fc = String(row?.fieldCode ?? "");
@@ -1073,7 +1080,6 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     setConfigured(true);
     setSaveSuccess({ name: createdName, id: createdId });
   }
-
 
 
   async function next() {
@@ -1601,87 +1607,105 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                       <div className="mdmCard__sub">Match / Exception / No match</div>
                     </div>
 
-                    <label className="mdmHeadToggle">
-                      <input
-                        className="mdmCheck"
-                        type="checkbox"
-                        checked={aiExceptions}
-                        onChange={(e) => setAiExceptions(e.target.checked)}
-                      />
-                      Enable Exceptions Agent
-                    </label>
+                    {step3Ok && (
+                      <label className="mdmHeadToggle">
+                        <input
+                          className="mdmCheck"
+                          type="checkbox"
+                          checked={aiExceptions}
+                          onChange={(e) => setAiExceptions(e.target.checked)}
+                        />
+                        Enable Exceptions Agent
+                      </label>
+                    )}
                   </div>
 
                   <div className="mdmCard__body">
-                    <div className="mdmLabel">Match threshold</div>
-                    <div className="mdmSliderRow">
-                      <input
-                        type="range"
-                        min={0.5}
-                        max={0.99}
-                        step={0.01}
-                        value={matchThreshold}
-                        onChange={(e) => setThresholds(Number(e.target.value), possibleThreshold)}
-                      />
-                      <div className="mdmMono">{pct01(matchThreshold)}</div>
-                    </div>
+                    {!step3Ok && (
+                      <div className="mdmTiny">Add match fields below to configure thresholds.</div>
+                    )}
 
-                    <div style={{ height: 10 }} />
+                    <div style={!step3Ok ? { display: "none" } : undefined}>
+                      <div className="mdmLabel">Match threshold</div>
+                      <div className="mdmSliderRow">
+                        <input
+                          type="range"
+                          min={0.5}
+                          max={0.99}
+                          step={0.01}
+                          value={matchThreshold}
+                          onChange={(e) => setThresholds(Number(e.target.value), possibleThreshold)}
+                        />
+                        <div className="mdmMono">{pct01(matchThreshold)}</div>
+                      </div>
 
-                    <div className="mdmLabel">Exception threshold</div>
-                    <div className="mdmSliderRow">
-                      <input
-                        type="range"
-                        min={0.3}
-                        max={0.95}
-                        step={0.01}
-                        value={possibleThreshold}
-                        onChange={(e) => setThresholds(matchThreshold, Number(e.target.value))}
-                      />
-                      <div className="mdmMono">{pct01(possibleThreshold)}</div>
-                    </div>
+                      <div style={{ height: 10 }} />
 
-                    <div style={{ marginTop: 10 }} className="mdmTiny">
-                      Exceptions are between <span className="mdmMono">{pct01(possibleThreshold)}</span> and{" "}
-                      <span className="mdmMono">{pct01(matchThreshold)}</span>.
+                      <div className="mdmLabel">Exception threshold</div>
+                      <div className="mdmSliderRow">
+                        <input
+                          type="range"
+                          min={0.3}
+                          max={0.95}
+                          step={0.01}
+                          value={possibleThreshold}
+                          onChange={(e) => setThresholds(matchThreshold, Number(e.target.value))}
+                        />
+                        <div className="mdmMono">{pct01(possibleThreshold)}</div>
+                      </div>
+
+                      <div style={{ marginTop: 10 }} className="mdmTiny">
+                        Exceptions are between <span className="mdmMono">{pct01(possibleThreshold)}</span> and{" "}
+                        <span className="mdmMono">{pct01(matchThreshold)}</span>.
+                      </div>
                     </div>
                   </div>
                 </div>
 
                 <div className="mdmCard">
+
                   <div className="mdmCard__head">
                     <div>
                       <div className="mdmCard__title">Survivorship</div>
                       <div className="mdmCard__sub">Simple by default. Advanced optional.</div>
                     </div>
-                    <div>
-                      <label className="mdmTiny" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <input
-                          className="mdmCheck"
-                          type="checkbox"
-                          checked={advanced}
-                          onChange={(e) => toggleAdvanced(e.target.checked)}
-                        />
-                        Advanced
-                      </label>
-                    </div>
+                    {step3Ok && (
+                      <div>
+                        <label className="mdmTiny" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <input
+                            className="mdmCheck"
+                            type="checkbox"
+                            checked={advanced}
+                            onChange={(e) => toggleAdvanced(e.target.checked)}
+                          />
+                          Advanced
+                        </label>
+                      </div>
+                    )}
                   </div>
 
+
                   <div className="mdmCard__body">
-                    {!advanced ? (
-                      <>
-                        <div className="mdmLabel">Default rule (applies to included fields)</div>
-                        <select
-                          className="mdmSelect"
-                          value={globalRule}
-                          onChange={(e) => applyGlobalRule(e.target.value)}
-                        >
-                          {SURVIVORSHIP_RULES.map((r) => (
-                            <option key={r.value} value={r.value}>
-                              {r.label}
-                            </option>
-                          ))}
-                        </select>
+                    {!step3Ok && (
+                      <div className="mdmTiny">Add match fields below to configure survivorship.</div>
+                    )}
+
+                    <div style={!step3Ok ? { display: "none" } : undefined}>
+                      {!advanced ? (
+                        <>
+                          <div className="mdmLabel">Default rule (applies to included fields)</div>
+                          <select
+                            className="mdmSelect"
+                            value={globalRule}
+                            onChange={(e) => applyGlobalRule(e.target.value)}
+                          >
+                            {SURVIVORSHIP_RULES.map((r) => (
+                              <option key={r.value} value={r.value}>
+                                {r.label}
+                              </option>
+                            ))}
+                          </select>
+
 
                         {globalRule === "system" && (
                           <>
@@ -1891,11 +1915,13 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                         </div>
                       </>
                     )}
+                    </div>
                   </div>
                 </div>
               </div>
 
               <div className="mdmCard">
+
                 <div className="mdmCard__head">
                   <div>
                     <div className="mdmCard__title">Per-field matching</div>
@@ -2104,7 +2130,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
                 className="mdmBtn mdmBtn--primary"
                 type="button"
                 onClick={finishWizard}
-                disabled={savingModel}
+                disabled={savingModel || !step3Ok}
               >
                 {savingModel ? "Saving..." : "Finish setup"}
               </button>

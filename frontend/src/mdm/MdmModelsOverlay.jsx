@@ -65,6 +65,9 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
 
   const [jsonOpenId, setJsonOpenId] = useState("");
 
+  const userLabel = String(currentUser || getAuthUsername() || "").trim();
+
+
   function applySort(nextKey) {
     if (sortKey === nextKey) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -182,7 +185,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
 
   return (
     <div className="mdmOverlay" role="dialog" aria-modal="true" aria-label="MDM models">
-      <div className="mdmDialog">
+      <div className="mdmDialog" style={{ width: "min(1200px, calc(100vw - 48px))" }}>
         <div className="mdmDialog__head">
           <div>
             <div className="mdmDialog__title">MDM models</div>
@@ -205,35 +208,55 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
             </div>
           </div>
 
-          <div className="mdmTable">
-            <div className="mdmTHead" style={{ gridTemplateColumns: "1.2fr 1.2fr 120px 200px 200px 320px" }}>
+          <div className="mdmTable" style={{ overflowX: "auto", position: "relative" }}>
+            <div
+              className="mdmTHead"
+              style={{
+                gridTemplateColumns: "minmax(320px, 2.4fr) minmax(280px, 1.8fr) 140px 200px 200px 260px",
+                background: "var(--panel, #fff)",
+              }}
+            >
               <div
-                style={{ fontWeight: 900, cursor: "pointer", userSelect: "none" }}
+                style={{ fontWeight: 900, cursor: "pointer", userSelect: "none", textAlign: "center" }}
                 onClick={() => applySort("name")}
                 title="Sort by name"
               >
                 Model name{sortMark("name")}
               </div>
               <div
-                style={{ fontWeight: 900, cursor: "pointer", userSelect: "none" }}
+                style={{ fontWeight: 900, cursor: "pointer", userSelect: "none", textAlign: "center" }}
                 onClick={() => applySort("id")}
                 title="Sort by model id"
               >
                 Model id{sortMark("id")}
               </div>
-              <div style={{ fontWeight: 900 }}>app_user_id</div>
+              <div style={{ fontWeight: 900, textAlign: "center" }}>User</div>
               <div
-                style={{ fontWeight: 900, cursor: "pointer", userSelect: "none" }}
+                style={{ fontWeight: 900, cursor: "pointer", userSelect: "none", textAlign: "center" }}
                 onClick={() => applySort("created")}
                 title="Sort by created date"
               >
                 Created{sortMark("created")}
               </div>
-              <div style={{ fontWeight: 900 }}>Updated</div>
-              <div style={{ fontWeight: 900, textAlign: "right" }}>Actions</div>
+              <div style={{ fontWeight: 900, textAlign: "center" }}>Updated</div>
+              <div
+                style={{
+                  fontWeight: 900,
+                  textAlign: "center",
+                  position: "sticky",
+                  right: 0,
+                  zIndex: 3,
+                  background: "inherit",
+                  borderLeft: "1px solid var(--border, rgba(0,0,0,0.12))",
+                }}
+              >
+                Actions
+              </div>
             </div>
 
+
             <div className="mdmTableBody">
+
               {!loading && models.length === 0 ? (
                 <div style={{ padding: 12, color: "var(--muted)", fontSize: 13 }}>
                   No models found.
@@ -242,11 +265,14 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                 sortedModels.map((m) => {
                   const isJsonOpen = jsonOpenId === String(m.id || "");
                   const createdLabel = fmtDate(m.created_at);
-                  const updatedLabel = fmtDate(m.updated_at);
+                  const updatedLabel = fmtDate(m.updated_at || m.created_at);
 
                   return (
                     <React.Fragment key={m.id}>
-                      <div className="mdmTRow" style={{ gridTemplateColumns: "1.2fr 1.2fr 120px 200px 200px 320px" }}>
+                      <div
+                        className="mdmTRow"
+                        style={{ gridTemplateColumns: "minmax(320px, 2.4fr) minmax(280px, 1.8fr) 140px 200px 200px 260px" }}
+                      >
                         <div title={m.model_name || ""} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {m.model_name || ""}
                         </div>
@@ -255,8 +281,8 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                           {m.id || ""}
                         </div>
 
-                        <div className="mdmMono" title={String(m.app_user_id ?? "")} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {m.app_user_id ?? ""}
+                        <div title={userLabel} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {userLabel}
                         </div>
 
                         <div title={createdLabel} style={{ color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -267,7 +293,19 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                           {updatedLabel || "—"}
                         </div>
 
-                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            justifyContent: "flex-end",
+                            flexWrap: "nowrap",
+                            position: "sticky",
+                            right: 0,
+                            zIndex: 1,
+                            background: "var(--panel, #fff)",
+                            borderLeft: "1px solid var(--border, rgba(0,0,0,0.12))",
+                          }}
+                        >
                           <a
                             className="mdmBtn mdmBtn--ghost mdmBtn--xs"
                             href="#"
@@ -299,7 +337,10 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                       </div>
 
                       {isJsonOpen ? (
-                        <div className="mdmTRow" style={{ gridTemplateColumns: "1.2fr 1.2fr 120px 200px 200px 320px" }}>
+                        <div
+                          className="mdmTRow"
+                          style={{ gridTemplateColumns: "minmax(320px, 2.4fr) minmax(280px, 1.8fr) 140px 200px 200px 260px" }}
+                        >
                           <div style={{ gridColumn: "1 / -1" }}>
                             <div className="mdmLabel" style={{ marginTop: 4 }}>raw model json</div>
                             <pre className="mdmPre" style={{ margin: 0 }}>{safeJson(m)}</pre>

@@ -248,9 +248,22 @@ def mdm_list_models():
             d["config"] = json.loads(d.get("config_json") or "{}")
         except Exception:
             d["config"] = None
+
+        # Normalize keys expected by the UI.
+        cfg = d.get("config")
+        if not str(d.get("model_name") or "").strip():
+            alt = str(d.get("name") or "").strip()
+            if not alt and isinstance(cfg, dict):
+                alt = str(cfg.get("domainModelName") or "").strip()
+            d["model_name"] = alt
+
+        if d.get("app_user_id") is None and d.get("owner_user_id") is not None:
+            d["app_user_id"] = d.get("owner_user_id")
+
         out.append(d)
 
     return jsonify({"ok": True, "models": out})
+
 
 @bp.get("/mdm/models/<model_id>")
 def mdm_get_model_by_id(model_id: str):
@@ -277,7 +290,19 @@ def mdm_get_model_by_id(model_id: str):
     except Exception:
         d["config"] = None
 
+    # Normalize keys expected by the UI.
+    cfg = d.get("config")
+    if not str(d.get("model_name") or "").strip():
+        alt = str(d.get("name") or "").strip()
+        if not alt and isinstance(cfg, dict):
+            alt = str(cfg.get("domainModelName") or "").strip()
+        d["model_name"] = alt
+
+    if d.get("app_user_id") is None and d.get("owner_user_id") is not None:
+        d["app_user_id"] = d.get("owner_user_id")
+
     return jsonify({"ok": True, "model": d})
+
 
 @bp.get("/mdm/models/by-name/<model_name>")
 def mdm_get_model_by_name(model_name: str):
