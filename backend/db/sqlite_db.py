@@ -36,6 +36,13 @@ def _ensure_app_user_id(conn: sqlite3.Connection, table_name: str) -> None:
             f"ALTER TABLE {table_name} ADD COLUMN app_user_id INTEGER REFERENCES users(id)"
         )
 
+def _ensure_column(conn: sqlite3.Connection, table_name: str, col_name: str, col_sql: str) -> None:
+    info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    cols = {r["name"] for r in info}
+    if col_name not in cols:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_sql}")
+
+
 def init_users() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -588,9 +595,9 @@ def init_source_input() -> None:
 
             if "id" in cols:
                 needs_rebuild = True
-            elif pk_cols != ["source_id"]:
+            elif pk_cols != ["app_user_id", "source_name", "source_id"]:
                 needs_rebuild = True
-            elif cols and cols[0] != "source_id":
+            elif cols and cols[0] != "app_user_id":
                 needs_rebuild = True
 
         if exists and needs_rebuild:
@@ -599,8 +606,9 @@ def init_source_input() -> None:
             conn.execute(
                 """
                 CREATE TABLE source_input (
-                    source_id TEXT PRIMARY KEY,
+                    app_user_id INTEGER NOT NULL REFERENCES users(id),
                     source_name TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
                     f01 TEXT, f02 TEXT, f03 TEXT, f04 TEXT, f05 TEXT,
                     f06 TEXT, f07 TEXT, f08 TEXT, f09 TEXT, f10 TEXT,
                     f11 TEXT, f12 TEXT, f13 TEXT, f14 TEXT, f15 TEXT,
@@ -609,24 +617,22 @@ def init_source_input() -> None:
                     created_by TEXT NOT NULL,
                     updated_at TEXT,
                     updated_by TEXT,
-                    app_user_id INTEGER REFERENCES users(id)
+                    PRIMARY KEY (app_user_id, source_name, source_id)
                 )
                 """
             )
 
-
             wanted = [
-                "source_id",
+                "app_user_id",
                 "source_name",
+                "source_id",
                 "f01","f02","f03","f04","f05","f06","f07","f08","f09","f10",
                 "f11","f12","f13","f14","f15","f16","f17","f18","f19","f20",
                 "created_at",
                 "created_by",
                 "updated_at",
                 "updated_by",
-                "app_user_id",
             ]
-
 
             have = set(cols)
             copy_cols = [c for c in wanted if c in have]
@@ -641,8 +647,9 @@ def init_source_input() -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS source_input (
-                source_id TEXT PRIMARY KEY,
+                app_user_id INTEGER NOT NULL REFERENCES users(id),
                 source_name TEXT NOT NULL,
+                source_id TEXT NOT NULL,
                 f01 TEXT, f02 TEXT, f03 TEXT, f04 TEXT, f05 TEXT,
                 f06 TEXT, f07 TEXT, f08 TEXT, f09 TEXT, f10 TEXT,
                 f11 TEXT, f12 TEXT, f13 TEXT, f14 TEXT, f15 TEXT,
@@ -651,20 +658,21 @@ def init_source_input() -> None:
                 created_by TEXT NOT NULL,
                 updated_at TEXT,
                 updated_by TEXT,
-                app_user_id INTEGER REFERENCES users(id)
+                PRIMARY KEY (app_user_id, source_name, source_id)
             )
             """
         )
-        _ensure_app_user_id(conn, "source_input")
 
-
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_source_input_source_name_id ON source_input(source_name, source_id)"
-        )
+        # old uniqueness blocks multi-user; drop it
+        conn.execute("DROP INDEX IF EXISTS ux_source_input_source_name_id")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_source_input_source_id ON source_input(source_id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_source_input_user_source ON source_input(app_user_id, source_name, source_id)"
+        )
+
 
 def init_match_job() -> None:
     with get_conn() as conn:
@@ -674,6 +682,7 @@ def init_match_job() -> None:
               job_id TEXT PRIMARY KEY,
 
               status TEXT NOT NULL,          -- queued | running | completed | failed
+              model_id TEXT,
               model_json TEXT NOT NULL,
 
               message TEXT,
@@ -695,10 +704,15 @@ def init_match_job() -> None:
             """
         )
         _ensure_app_user_id(conn, "match_job")
+        _ensure_column(conn, "match_job", "model_id", "model_id TEXT")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_match_job_status ON match_job(status)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_match_job_user_model_status ON match_job(app_user_id, model_id, status)"
+        )
+
 
 
 def init_recon_cluster() -> None:
@@ -707,6 +721,8 @@ def init_recon_cluster() -> None:
             """
             CREATE TABLE IF NOT EXISTS recon_cluster (
               job_id TEXT NOT NULL,
+              model_id TEXT,
+
               cluster_id TEXT NOT NULL,
 
               record_id TEXT NOT NULL,
@@ -724,6 +740,7 @@ def init_recon_cluster() -> None:
             """
         )
         _ensure_app_user_id(conn, "recon_cluster")
+        _ensure_column(conn, "recon_cluster", "model_id", "model_id TEXT")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_recon_cluster_job_cluster ON recon_cluster(job_id, cluster_id)"
@@ -731,13 +748,84 @@ def init_recon_cluster() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_recon_cluster_cluster_id ON recon_cluster(cluster_id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model ON recon_cluster(app_user_id, model_id)"
+        )
+
 
 
 def init_cluster_map() -> None:
     with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='cluster_map'"
+        )
+        exists = cur.fetchone() is not None
+
+        needs_rebuild = False
+        cols = []
+        pk_cols = []
+
+        desired_pk = ["app_user_id", "model_id", "source_name", "source_id"]
+
+        if exists:
+            info = conn.execute("PRAGMA table_info(cluster_map)").fetchall()
+            cols = [r["name"] for r in info]
+            pk_cols = [r["name"] for r in sorted(info, key=lambda x: x["pk"]) if r["pk"]]
+
+            if "model_id" not in cols:
+                needs_rebuild = True
+            elif pk_cols != desired_pk:
+                needs_rebuild = True
+
+        if exists and needs_rebuild:
+            conn.execute("ALTER TABLE cluster_map RENAME TO cluster_map_old")
+
+            conn.execute(
+                """
+                CREATE TABLE cluster_map (
+                  app_user_id INTEGER NOT NULL REFERENCES users(id),
+                  model_id TEXT NOT NULL DEFAULT 'legacy',
+
+                  source_name TEXT NOT NULL,
+                  source_id   TEXT NOT NULL,
+                  cluster_id  TEXT NOT NULL,
+
+                  first_seen_at TEXT NOT NULL,
+                  last_seen_at  TEXT NOT NULL,
+
+                  PRIMARY KEY (app_user_id, model_id, source_name, source_id)
+                )
+                """
+            )
+
+            # Legacy rows have no model_id; store them under model_id='legacy'.
+            # Rows without app_user_id are invalid and are skipped.
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO cluster_map (
+                  app_user_id, model_id,
+                  source_name, source_id,
+                  cluster_id,
+                  first_seen_at, last_seen_at
+                )
+                SELECT
+                  app_user_id, 'legacy',
+                  source_name, source_id,
+                  cluster_id,
+                  first_seen_at, last_seen_at
+                FROM cluster_map_old
+                WHERE app_user_id IS NOT NULL
+                """
+            )
+
+            conn.execute("DROP TABLE cluster_map_old")
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS cluster_map (
+              app_user_id INTEGER NOT NULL REFERENCES users(id),
+              model_id TEXT NOT NULL DEFAULT 'legacy',
+
               source_name TEXT NOT NULL,
               source_id   TEXT NOT NULL,
               cluster_id  TEXT NOT NULL,
@@ -745,15 +833,18 @@ def init_cluster_map() -> None:
               first_seen_at TEXT NOT NULL,
               last_seen_at  TEXT NOT NULL,
 
-              app_user_id INTEGER REFERENCES users(id),
-              PRIMARY KEY (source_name, source_id)
+              PRIMARY KEY (app_user_id, model_id, source_name, source_id)
             )
             """
         )
-        _ensure_app_user_id(conn, "cluster_map")
+
+        _ensure_column(conn, "cluster_map", "model_id", "model_id TEXT")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_cluster_map_cluster_id ON cluster_map(cluster_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_cluster_map_user_model ON cluster_map(app_user_id, model_id)"
         )
 
 
@@ -764,6 +855,7 @@ def init_golden_record() -> None:
             CREATE TABLE IF NOT EXISTS golden_record (
               master_id TEXT PRIMARY KEY,
               job_id TEXT NOT NULL,
+              model_id TEXT,
 
               source_name TEXT NOT NULL DEFAULT 'MDM',
 
@@ -787,10 +879,49 @@ def init_golden_record() -> None:
             """
         )
         _ensure_app_user_id(conn, "golden_record")
+        _ensure_column(conn, "golden_record", "model_id", "model_id TEXT")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_golden_record_job_id ON golden_record(job_id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_golden_record_user_model ON golden_record(app_user_id, model_id)"
+        )
+
+def init_match_exception() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS match_exception (
+              job_id TEXT NOT NULL,
+              model_id TEXT,
+
+              record_id TEXT NOT NULL,
+              source_name TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+
+              candidate_cluster_id TEXT NOT NULL,
+              candidate_record_id TEXT,
+              score REAL,
+
+              reason TEXT NOT NULL,
+              details_json TEXT,
+
+              created_at TEXT NOT NULL,
+              resolved_at TEXT,
+              resolved_by TEXT,
+
+              app_user_id INTEGER REFERENCES users(id),
+              PRIMARY KEY (job_id, record_id, candidate_cluster_id)
+            )
+            """
+        )
+        _ensure_app_user_id(conn, "match_exception")
+        _ensure_column(conn, "match_exception", "model_id", "model_id TEXT")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_match_exception_job ON match_exception(job_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_match_exception_candidate_cluster ON match_exception(candidate_cluster_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_match_exception_user_model ON match_exception(app_user_id, model_id)")
 
 
 def init_all_tables() -> None:
@@ -804,6 +935,8 @@ def init_all_tables() -> None:
     init_recon_cluster()
     init_cluster_map()
     init_golden_record()
+    init_match_exception()
+
 
 
 

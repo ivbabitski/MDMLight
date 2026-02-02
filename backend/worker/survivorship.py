@@ -90,7 +90,7 @@ def _priority_rank(value: Any, priority_list: Any) -> int:
     # lower is better, missing/unknown => huge (last)
     if not isinstance(priority_list, list) or len(priority_list) == 0:
         return 10**9
-    pr = [_norm_key(v) for v in priority_list[:20]]
+    pr = [_norm_key(v) for v in priority_list[:50]]
     m = {v: i for i, v in enumerate(pr) if v}
     v = _norm_key(value)
     if not v:
@@ -113,18 +113,28 @@ class SourceRow:
     completeness: int
 
 
-def _load_source_rows() -> Dict[str, SourceRow]:
-    cols = ["id", "source_name", "source_id"] + [f"f{str(i).zfill(2)}" for i in range(1, 21)] + [
+def _load_source_rows(app_user_id: Optional[int] = None) -> Dict[str, SourceRow]:
+    """
+    source_input does NOT have an `id` column. We use source_name::source_id as record_id.
+    """
+    cols = ["source_id", "source_name"] + [f"f{str(i).zfill(2)}" for i in range(1, 21)] + [
         "created_at", "created_by", "updated_at", "updated_by"
     ]
-    sql = f"SELECT {', '.join(cols)} FROM source_input"
+
+    where = ""
+    params: Tuple[Any, ...] = ()
+    if app_user_id is not None:
+        where = " WHERE app_user_id=?"
+        params = (app_user_id,)
+
+    sql = f"SELECT {', '.join(cols)} FROM source_input{where}"
 
     out: Dict[str, SourceRow] = {}
     with get_conn() as conn:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, params).fetchall()
 
     for r in rows:
-        record_id = r["id"]
+        record_id = f"{r['source_name']}::{r['source_id']}"
         f20 = [r[f"f{str(i).zfill(2)}"] for i in range(1, 21)]
         c_at = r["created_at"]
         u_at = r["updated_at"]
@@ -294,6 +304,9 @@ def _pick_field_value(members: List[SourceRow], field_idx: int, field_cfg: Dict[
 
 def select_golden_records_for_job(
     job_id: str,
+    model: Optional[Dict[str, Any]] = None,
+    app_user_id: Optional[int] = None,
+    model_id: Optional[str] = None,
     actor: str = "worker",
     mdm_source_name: str = "MDM",
 ) -> Tuple[Dict[str, str], List[Tuple]]:
@@ -303,13 +316,14 @@ def select_golden_records_for_job(
       - rep_by_cluster: {cluster_id: record_id}
       - golden_upserts: tuples for worker to INSERT/UPSERT into golden_record
     """
-    model = _load_job_model(job_id)
-    match_threshold = float(model.get("model_threshold") or 0.85)
+    if model is None:
+        model = _load_job_model(job_id)
 
+    match_threshold = float(model.get("model_threshold") or 0.85)
     surv = _canonical_survivorship(model)
 
-    source_rows = _load_source_rows()     # record_id -> SourceRow
-    clusters = _load_clusters(job_id)     # cluster_id -> [record_id...]
+    source_rows = _load_source_rows(app_user_id=app_user_id)  # record_id -> SourceRow
+    clusters = _load_clusters(job_id)                         # cluster_id -> [record_id...]
 
     if not clusters:
         return {}, []
@@ -367,8 +381,9 @@ def select_golden_records_for_job(
                 actor,
                 now,
                 actor,
+                app_user_id,
+                model_id,
             )
         )
 
     return rep_by_cluster, golden_upserts
-

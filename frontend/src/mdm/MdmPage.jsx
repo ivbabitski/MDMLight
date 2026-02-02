@@ -112,9 +112,10 @@ function safeJson(v) {
 }
 
 
-async function fetchSourceInputSummary(appUserId) {
+async function fetchSourceInputSummary(appUserId, modelId) {
   const base = String(API_BASE || "").trim();
-  const url = `${base}/api/source-input/summary?t=${Date.now()}`;
+  const mid = String(modelId || "").trim();
+  const url = `${base}/api/source-input/summary?model_id=${encodeURIComponent(mid)}&t=${Date.now()}`;
 
   const userId = String(appUserId || "").trim();
 
@@ -127,6 +128,7 @@ async function fetchSourceInputSummary(appUserId) {
     cache: "no-store",
     headers,
   });
+
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
@@ -178,15 +180,27 @@ export default function MdmPage() {
       return;
     }
 
+    let modelId = "";
+    try {
+      modelId = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+    } catch {}
+
+    if (!modelId) {
+      setSourceSummary(null);
+      setSourceSummaryErr("model_id is required (select a model)");
+      return;
+    }
+
     setSourceSummaryErr("");
     try {
-      const data = await fetchSourceInputSummary(userId);
+      const data = await fetchSourceInputSummary(userId, modelId);
       setSourceSummary(data);
     } catch (e) {
       setSourceSummary(null);
       setSourceSummaryErr(String(e?.message || e));
     }
   }, [currentUserId]);
+
 
   useEffect(() => {
     try {
@@ -257,6 +271,12 @@ export default function MdmPage() {
     if (Array.isArray(sourceSummary?.field_keys) && sourceSummary.field_keys.length) return sourceSummary.field_keys;
     return SOURCE_INPUT_FIELD_KEYS;
   }, [sourceSummary]);
+
+  const sourceFieldLabels = useMemo(() => {
+    const pills = Array.isArray(sourceSummary?.field_pills) ? sourceSummary.field_pills : [];
+    return pills.map((x) => String(x || "").trim()).filter(Boolean);
+  }, [sourceSummary]);
+
 
   const matchKeys = useMemo(() => job?.model_json?.match_fields || [], [job]);
 
@@ -586,8 +606,9 @@ export default function MdmPage() {
             
 
       {/* START SETUP ONLY */}
-      <div className="mdmMain">
+      <div className="mdmMain mdmMain--dash">
         <div className="mdmMainInner">
+
 
           <div className="mdmHero">
             <div>
@@ -665,12 +686,23 @@ export default function MdmPage() {
 
                 <div className="mdmSectionTitle">Fields</div>
                 <div className="mdmPillRow">
-                  {sourceFieldKeys.slice(0, 4).map((k) => (
-                    <span className="mdmPillSoft" key={k}>{k.toUpperCase()}</span>
-                  ))}
-                  <span className="mdmPillSoft">…</span>
-                  <span className="mdmPillSoft">{sourceFieldKeys[sourceFieldKeys.length - 1].toUpperCase()}</span>
+                  {sourceFieldLabels.length === 0 ? (
+                    <span className="mdmPillSoft">—</span>
+                  ) : sourceFieldLabels.length <= 6 ? (
+                    sourceFieldLabels.map((lbl) => (
+                      <span className="mdmPillSoft" key={lbl}>{lbl}</span>
+                    ))
+                  ) : (
+                    <>
+                      {sourceFieldLabels.slice(0, 4).map((lbl) => (
+                        <span className="mdmPillSoft" key={lbl}>{lbl}</span>
+                      ))}
+                      <span className="mdmPillSoft">…</span>
+                      <span className="mdmPillSoft">{sourceFieldLabels[sourceFieldLabels.length - 1]}</span>
+                    </>
+                  )}
                 </div>
+
 
 
               </div>
@@ -683,13 +715,22 @@ export default function MdmPage() {
                   <div className="mdmCard__sub">Golden, exceptions, clusters</div>
                 </div>
                 <button
-                  className="mdmBtn mdmBtn--soft mdmBtn--small"
+                  className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
                   type="button"
                   onClick={() => setModelOpen(true)}
+                  title="Matching model"
+                  aria-label="Matching model"
                 >
-                  Matching model
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M4 6h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M7 6v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M4 12h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M17 12v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  </svg>
                 </button>
               </div>
+
               <div className="mdmCard__body">
                 <div className="mdmKpiRow">
                   <div className="mdmKpi">

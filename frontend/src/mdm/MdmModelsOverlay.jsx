@@ -66,9 +66,13 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
   const [jsonOpenId, setJsonOpenId] = useState("");
 
   const userLabel = String(currentUser || getAuthUsername() || "").trim();
-
+  const COLS = "minmax(200px, 320px) minmax(420px, 1fr) 160px 200px 200px 260px";
+  const HEAD_BG = "#f6f7f9";
 
   function applySort(nextKey) {
+
+
+
     if (sortKey === nextKey) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
       return;
@@ -212,10 +216,12 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
             <div
               className="mdmTHead"
               style={{
-                gridTemplateColumns: "minmax(320px, 2.4fr) minmax(280px, 1.8fr) 140px 200px 200px 260px",
-                background: "var(--panel, #fff)",
+                gridTemplateColumns: COLS,
+                background: HEAD_BG,
+                borderBottom: "1px solid var(--border, rgba(0,0,0,0.10))",
               }}
             >
+
               <div
                 style={{ fontWeight: 900, cursor: "pointer", userSelect: "none", textAlign: "center" }}
                 onClick={() => applySort("name")}
@@ -246,17 +252,18 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                   position: "sticky",
                   right: 0,
                   zIndex: 3,
-                  background: "inherit",
+                  background: HEAD_BG,
                   borderLeft: "1px solid var(--border, rgba(0,0,0,0.12))",
+                  borderBottom: "1px solid var(--border, rgba(0,0,0,0.10))",
+                  padding: "6px 8px",
                 }}
               >
                 Actions
               </div>
             </div>
+            
 
-
-            <div className="mdmTableBody">
-
+            <div className="mdmTableBody" style={{ overflow: "visible" }}>
               {!loading && models.length === 0 ? (
                 <div style={{ padding: 12, color: "var(--muted)", fontSize: 13 }}>
                   No models found.
@@ -271,8 +278,12 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                     <React.Fragment key={m.id}>
                       <div
                         className="mdmTRow"
-                        style={{ gridTemplateColumns: "minmax(320px, 2.4fr) minmax(280px, 1.8fr) 140px 200px 200px 260px" }}
+                        style={{
+                          gridTemplateColumns: COLS,
+                          overflow: "visible",
+                        }}
                       >
+
                         <div title={m.model_name || ""} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {m.model_name || ""}
                         </div>
@@ -339,11 +350,27 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                       {isJsonOpen ? (
                         <div
                           className="mdmTRow"
-                          style={{ gridTemplateColumns: "minmax(320px, 2.4fr) minmax(280px, 1.8fr) 140px 200px 200px 260px" }}
+                          style={{
+                            gridTemplateColumns: COLS,
+                            overflow: "visible",
+                          }}
                         >
                           <div style={{ gridColumn: "1 / -1" }}>
                             <div className="mdmLabel" style={{ marginTop: 4 }}>raw model json</div>
-                            <pre className="mdmPre" style={{ margin: 0 }}>{safeJson(m)}</pre>
+                            <pre
+                              className="mdmPre"
+                              style={{
+                                margin: 0,
+                                maxHeight: 260,
+                                overflowY: "auto",
+                                overflowX: "hidden",
+                                whiteSpace: "pre-wrap",
+                                overflowWrap: "anywhere",
+                              }}
+                            >
+                              {safeJson(m)}
+                            </pre>
+
                           </div>
                         </div>
                       ) : null}

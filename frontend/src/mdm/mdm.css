@@ -504,7 +504,7 @@
 .mdmSliderRow input[type="range"] { width: 100%; }
 .mdmMono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
-.mdmDivider { height: 1px; background: var(--border); margin: 4px 0; }
+.mdmDivider { height: 1px; background: var(--border); margin: 8px 0; }
 
 /* Responsive */
 @media (max-width: 980px){
@@ -883,7 +883,7 @@
 .mdmKpiRow{
   display:grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 12px;
 }
 @media (max-width: 720px){
   .mdmKpiRow{ grid-template-columns: 1fr; }
@@ -892,8 +892,9 @@
   border: 1px solid var(--border);
   background: #fff;
   border-radius: 16px;
-  padding: 12px;
+  padding: 14px;
 }
+
 .mdmKpiNum{
   font-size: 20px;
   font-weight: 950;
@@ -1227,4 +1228,84 @@
 
 .mdmWideTable.isGolden .mdmWideStickyCol{
   display: none;
+}
+
+/* ===== Dashboard polish (scoped to Start setup screen only) ===== */
+
+.mdmMain--dash{
+  background: linear-gradient(180deg, rgba(255,255,255,0.92), var(--panel2));
+  border-color: rgba(100,116,139,0.18);
+  box-shadow: 0 18px 45px rgba(17,24,39,0.06);
+}
+
+.mdmMain--dash .mdmMainInner{
+  gap: 16px;
+}
+
+.mdmMain--dash .mdmHero{
+  border-color: rgba(100,116,139,0.18);
+  background: linear-gradient(180deg, #ffffff, rgba(100,116,139,0.04));
+}
+
+.mdmMain--dash .mdmCard{
+  border-color: rgba(100,116,139,0.18);
+  box-shadow: 0 16px 40px rgba(17,24,39,0.06);
+}
+
+.mdmMain--dash .mdmCard__head{
+  padding: 16px 18px;
+}
+
+.mdmMain--dash .mdmCard__title{
+  font-size: 14px;
+}
+
+.mdmMain--dash .mdmKpiRow{
+  gap: 14px;
+}
+
+.mdmMain--dash .mdmKpi{
+  background: rgba(100,116,139,0.04);
+  border-color: rgba(100,116,139,0.14);
+  padding: 16px;
+}
+
+.mdmMain--dash .mdmKpiNum{
+  font-size: 22px;
+}
+
+.mdmMain--dash .mdmDivider{
+  margin: 12px 0;
+}
+
+
+.mdmMain--dash .mdmSeg{
+  background: rgba(100,116,139,0.04);
+  border-color: rgba(100,116,139,0.18);
+}
+
+.mdmMain--dash .mdmSeg button{
+  font-weight: 800;
+}
+
+.mdmMain--dash .mdmTag{
+  background: rgba(100,116,139,0.04);
+  border-color: rgba(100,116,139,0.18);
+}
+
+.mdmMain--dash .mdmWideTableWrap{
+  border-color: rgba(100,116,139,0.18);
+}
+
+.mdmMain--dash .mdmWideTable thead th,
+.mdmMain--dash .mdmWideTable tbody td{
+  font-variant-numeric: tabular-nums;
+}
+
+.mdmMain--dash .mdmWideTable tbody tr:nth-child(even) td:not(.mdmWideStickyCol){
+  background: rgba(100,116,139,0.018);
+}
+
+.mdmMain--dash .mdmWideTable tbody tr:hover td:not(.mdmWideStickyCol){
+  background: rgba(100,116,139,0.03);
 }
