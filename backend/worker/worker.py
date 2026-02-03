@@ -9,10 +9,11 @@ from datetime import datetime, timezone
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Dict, List, Tuple, Optional
 
-from rapidfuzz.distance import Levenshtein
+from levenshtein import conservative_match, weighted_gated_score
 
 from db.sqlite_db import get_conn, init_all_tables
 from worker.survivorship import select_golden_records_for_job
+
 
 POLL_SECONDS = float(os.environ.get("WORKER_POLL_SECONDS", "1.0"))
 
@@ -25,6 +26,11 @@ BUCKETS_PER_TASK = int(os.environ.get("MATCH_BUCKETS_PER_TASK", "50"))
 
 # Total CPU workers budget (split across concurrent jobs)
 MATCH_WORKERS_TOTAL = int(os.environ.get("MATCH_WORKERS", str(os.cpu_count() or 2)))
+
+# Candidate generation (blocking)
+MATCH_CANDIDATE_TARGET = int(os.environ.get("MATCH_CANDIDATE_TARGET", "1000"))
+MATCH_BLOCK_MAX_PREFIX_LEN = int(os.environ.get("MATCH_BLOCK_MAX_PREFIX_LEN", "10"))
+
 
 # Globals shared via fork inside ONE job process
 _G_RECORDS = None
@@ -42,14 +48,14 @@ def _norm(s: Any) -> str:
     s = " ".join(s.split())
     return s
 
+def _esc_pipe(x: Any) -> str:
+    if x is None:
+        return ""
+    return str(x).replace("|", "||")
 
-def _esc_pipe(s: Any) -> str:
-    # keep record_id unambiguous even if source_name/source_id contain "|"
-    return str(s or "").replace("|", "||")
+def _make_record_id(app_user_id: int, model_id: str, source_name: Any, source_id: Any) -> str:
+    return f"{app_user_id}|{model_id}|{_esc_pipe(source_name)}|{_esc_pipe(source_id)}"
 
-
-def _make_record_id(source_name: Any, source_id: Any) -> str:
-    return f"{_esc_pipe(source_name)}|{_esc_pipe(source_id)}"
 
 
 def _to_0_1(x: Any, default: float = 0.0) -> float:
@@ -117,10 +123,12 @@ def _init_globals(records: List[Record], cfg: Dict[str, Any]) -> None:
 
 def _pair_score(i: int, j: int) -> Tuple[bool, float]:
     """
-    Returns (is_match, score) using:
-      - per-field thresholds (strict reject)
-      - weighted average over present fields
-      - conservative similarity: 1 - d/minLen
+    Returns (is_match, score) using YOUR model:
+
+      contribution_i = (sim_i * weight_i) if sim_i >= field_threshold_i else 0
+      total_score = sum(contribution_i)
+
+    Weights are expected to be normalized to sum ~= 1.0 for the selected fields.
     """
     recs: List[Record] = _G_RECORDS
     cfg: Dict[str, Any] = _G_CFG
@@ -132,43 +140,9 @@ def _pair_score(i: int, j: int) -> Tuple[bool, float]:
     thresholds = cfg["thresholds"]    # list[float]
     model_T = cfg["model_T"]
 
-    sims = []
-    ws = []
+    score = weighted_gated_score(a, b, weights, thresholds)
+    return (score >= model_T), float(score)
 
-    for idx in range(len(a)):
-        va = a[idx]
-        vb = b[idx]
-        if not va or not vb:
-            continue
-
-        min_len = min(len(va), len(vb))
-        if min_len == 0:
-            continue
-
-        t = thresholds[idx]
-        allowed = int((1.0 - t) * min_len)
-
-        # Early cutoff: if distance > allowed, rapidfuzz returns allowed+1
-        d = Levenshtein.distance(va, vb, score_cutoff=allowed)
-        if d > allowed:
-            return False, 0.0  # strict per-field threshold reject
-
-        sim = 1.0 - (d / float(min_len))
-        sims.append(sim)
-        ws.append(weights[idx])
-
-    if not sims:
-        return False, 0.0
-
-    wsum = sum(ws)
-    if wsum <= 0:
-        return False, 0.0
-
-    score = 0.0
-    for sim, w in zip(sims, ws):
-        score += (w / wsum) * sim
-
-    return (score >= model_T), score
 
 
 def _process_bucket_chunk(bucket_lists: List[List[int]]) -> Tuple[List[Tuple[int, int]], int, int, List[Tuple[int, int, float]]]:
@@ -521,13 +495,294 @@ def _load_source_input(app_user_id: int) -> List[Tuple]:
         return [tuple(r) for r in rows]
 
 
-def _build_records(raw_rows: List[Tuple], cfg: Dict[str, Any]) -> List[Record]:
+def _load_model_name_from_mdm_models(model_id: str) -> str:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT model_name FROM mdm_models WHERE id=? AND deleted_at IS NULL LIMIT 1",
+            (model_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"mdm_models not found (or deleted): id={model_id}")
+        return str(row["model_name"])
+
+
+def _load_recon_cluster_rows(app_user_id: int, model_id: str) -> List[Tuple]:
+    cols = ["source_id", "source_name"] + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+    sql = f"SELECT {', '.join(cols)} FROM recon_cluster WHERE app_user_id=? AND model_id=?"
+    with get_conn() as conn:
+        rows = conn.execute(sql, (app_user_id, model_id)).fetchall()
+        return [tuple(r) for r in rows]
+
+
+def _load_unprocessed_source_input_rows(app_user_id: int, model_id: str) -> List[sqlite3.Row]:
+    cols = (
+        ["source_name", "source_id"]
+        + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+        + ["created_at", "created_by", "updated_at", "updated_by"]
+    )
+
+    sql = f"""
+      SELECT {", ".join([f"s.{c}" for c in cols])}
+      FROM source_input s
+      WHERE s.app_user_id=?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM recon_cluster r
+          WHERE r.app_user_id = s.app_user_id
+            AND r.model_id = ?
+            AND r.source_name = s.source_name
+            AND r.source_id = s.source_id
+        )
+      ORDER BY s.source_name, s.source_id
+    """
+
+    with get_conn() as conn:
+        return conn.execute(sql, (app_user_id, model_id)).fetchall()
+
+
+def _candidate_query(
+    conn: sqlite3.Connection,
+    app_user_id: int,
+    model_id: str,
+    cfg: Dict[str, Any],
+    f1: str,
+    p1: str,
+    l1: int,
+    f2: Optional[str] = None,
+    p2: str = "",
+    l2: int = 0,
+) -> List[sqlite3.Row]:
+    if not _is_f_code(f1):
+        return []
+    if f2 is not None and not _is_f_code(f2):
+        return []
+
+    cols = ["cluster_id", "source_name", "source_id"] + list(cfg.get("selected_fields") or [])
+    where = [
+        "app_user_id=?",
+        "model_id=?",
+        "(match_status IS NULL OR match_status != 'exception')",
+        f"substr(lower(coalesce({f1}, '')), 1, ?) = ?",
+    ]
+    params: List[Any] = [app_user_id, model_id, int(l1), str(p1)]
+
+    if f2 is not None:
+        where.append(f"substr(lower(coalesce({f2}, '')), 1, ?) = ?")
+        params.extend([int(l2), str(p2)])
+
+    params.append(int(MATCH_CANDIDATE_TARGET) + 1)
+
+    sql = f"SELECT {', '.join(cols)} FROM recon_cluster WHERE {' AND '.join(where)} LIMIT ?"
+    return conn.execute(sql, tuple(params)).fetchall()
+
+
+def _adaptive_candidates(
+    conn: sqlite3.Connection,
+    app_user_id: int,
+    model_id: str,
+    cfg: Dict[str, Any],
+    norm_by_field: Dict[str, str],
+) -> List[sqlite3.Row]:
+    selected_fields: List[str] = list(cfg.get("selected_fields") or [])
+    weights: List[float] = list(cfg.get("weights") or [])
+
+    pairs = list(zip(selected_fields, weights))
+    pairs.sort(key=lambda x: float(x[1] or 0.0), reverse=True)
+
+    usable = [(f, norm_by_field.get(f, "")) for f, _ in pairs if norm_by_field.get(f, "")]
+    usable = usable[:4]
+
+    if not usable:
+        return []
+
+    # Single blocker
+    if len(usable) == 1:
+        f1, v1 = usable[0]
+        max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
+        l1 = 1
+        while True:
+            rows = _candidate_query(conn, app_user_id, model_id, cfg, f1=f1, p1=v1[:l1], l1=l1)
+            if len(rows) <= MATCH_CANDIDATE_TARGET or l1 >= max1:
+                return rows[:MATCH_CANDIDATE_TARGET]
+            l1 += 1
+
+    # Try a few 2-field combinations: (1,2) then (1,3) then (2,3)
+    combos: List[Tuple[int, int]] = [(0, 1)]
+    if len(usable) >= 3:
+        combos.append((0, 2))
+        combos.append((1, 2))
+
+    for a, b in combos:
+        f1, v1 = usable[a]
+        f2, v2 = usable[b]
+
+        max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
+        max2 = min(len(v2), int(MATCH_BLOCK_MAX_PREFIX_LEN))
+
+        l1 = 1
+        l2 = 1
+
+        while True:
+            rows = _candidate_query(
+                conn,
+                app_user_id,
+                model_id,
+                cfg,
+                f1=f1,
+                p1=v1[:l1],
+                l1=l1,
+                f2=f2,
+                p2=v2[:l2],
+                l2=l2,
+            )
+
+            if len(rows) <= MATCH_CANDIDATE_TARGET:
+                return rows
+
+            if l1 >= max1 and l2 >= max2:
+                break
+
+            # tightening pattern: (1,1)->(2,1)->(2,2)->(3,2)->(3,3)->...
+            if l1 == l2:
+                if l1 < max1:
+                    l1 += 1
+                elif l2 < max2:
+                    l2 += 1
+                else:
+                    break
+            else:
+                if l2 < max2:
+                    l2 += 1
+                elif l1 < max1:
+                    l1 += 1
+                else:
+                    break
+
+    return []
+
+
+
+def _seed_recon_cluster_from_source_input(app_user_id: int, model_id: str, model_name: str) -> int:
+    src_cols = (
+        ["source_name", "source_id"]
+        + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+        + ["created_at", "created_by", "updated_at", "updated_by"]
+    )
+
+    insert_cols = (
+        ["cluster_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
+        + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+        + ["created_at", "created_by", "updated_at", "updated_by", "match_status"]
+    )
+
+    placeholders = ", ".join(["?"] * len(insert_cols))
+    now = _utc_now_iso()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join(src_cols)} FROM source_input WHERE app_user_id=?",
+            (app_user_id,),
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        to_insert: List[Tuple[Any, ...]] = []
+        map_rows: List[Tuple[Any, ...]] = []
+
+        for r in rows:
+            cid = str(uuid.uuid4())
+
+            vals: List[Any] = [
+                cid,
+                model_id,
+                model_name,
+                r["source_name"],
+                r["source_id"],
+                app_user_id,
+            ]
+
+            for i in range(1, 21):
+                vals.append(r[f"f{str(i).zfill(2)}"])
+
+            vals.append(r["created_at"])
+            vals.append(r["created_by"])
+            vals.append(r["updated_at"])
+            vals.append(r["updated_by"])
+            vals.append("no_match")
+
+            to_insert.append(tuple(vals))
+
+            map_rows.append(
+                (
+                    app_user_id,
+                    model_id,
+                    r["source_name"],
+                    r["source_id"],
+                    cid,
+                    now,
+                    now,
+                )
+            )
+
+        conn.executemany(
+            f"INSERT INTO recon_cluster ({', '.join(insert_cols)}) VALUES ({placeholders})",
+            to_insert,
+        )
+
+        conn.executemany(
+            """
+            INSERT INTO cluster_map (
+              app_user_id, model_id,
+              source_name, source_id,
+              cluster_id,
+              first_seen_at, last_seen_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(app_user_id, model_id, source_name, source_id) DO UPDATE SET
+              cluster_id = excluded.cluster_id,
+              last_seen_at = excluded.last_seen_at
+            """,
+            map_rows,
+        )
+
+        return len(to_insert)
+
+
+
+def _step1_recon_cluster_sync(app_user_id: int, model_id: str) -> Tuple[int, int]:
+    """
+    Ensures recon_cluster is not empty for this (app_user_id, model_id).
+
+    - If recon_cluster already has rows: do nothing.
+    - If empty: bootstrap recon_cluster from source_input (each record becomes its own cluster).
+    """
+    with get_conn() as conn:
+        has_any = (
+            conn.execute(
+                "SELECT 1 FROM recon_cluster WHERE app_user_id=? AND model_id=? LIMIT 1",
+                (app_user_id, model_id),
+            ).fetchone()
+            is not None
+        )
+
+    inserted = 0
+    if not has_any:
+        model_name = _load_model_name_from_mdm_models(model_id)
+        inserted = _seed_recon_cluster_from_source_input(app_user_id, model_id, model_name)
+
+    rows = _load_recon_cluster_rows(app_user_id, model_id)
+    return len(rows), inserted
+
+
+
+def _build_records(raw_rows: List[Tuple], cfg: Dict[str, Any], app_user_id: int, model_id: str) -> List[Record]:
     sel_idx = cfg["selected_indices"]
     records: List[Record] = []
     for row in raw_rows:
         source_id = str(row[0])
         source_name = str(row[1])
-        record_id = _make_record_id(source_name, source_id)
+        record_id = _make_record_id(app_user_id, model_id, source_name, source_id)
         raw20 = list(row[2:22])  # f01..f20
         norm_selected = [_norm(raw20[i]) for i in sel_idx]
         records.append(Record(record_id, source_name, source_id, raw20, norm_selected))
@@ -794,14 +1049,14 @@ def _write_survivorship(
               master_id, job_id,
               source_name,
               match_threshold, survivorship_json,
-              representative_record_id, lineage_json,
+              representative_record_id, representative_source_name, representative_source_id, lineage_json,
               f01,f02,f03,f04,f05,f06,f07,f08,f09,f10,
               f11,f12,f13,f14,f15,f16,f17,f18,f19,f20,
               created_at, created_by,
               updated_at, updated_by,
               app_user_id, model_id
             ) VALUES (
-              ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?,?,?,?,?,?,?,?,?,?,
               ?,?,?,?,?,?,?,?,?,?,
               ?, ?, ?, ?,
@@ -813,6 +1068,8 @@ def _write_survivorship(
               match_threshold = excluded.match_threshold,
               survivorship_json = excluded.survivorship_json,
               representative_record_id = excluded.representative_record_id,
+              representative_source_name = excluded.representative_source_name,
+              representative_source_id = excluded.representative_source_id,
               lineage_json = excluded.lineage_json,
               f01=excluded.f01,f02=excluded.f02,f03=excluded.f03,f04=excluded.f04,f05=excluded.f05,
               f06=excluded.f06,f07=excluded.f07,f08=excluded.f08,f09=excluded.f09,f10=excluded.f10,
@@ -845,6 +1102,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
         _set_job_status(job_id, "failed", "job missing app_user_id or model_id")
         return
 
+    _set_job_status(job_id, "running", None)
+
     # Model config: prefer job snapshot; else load from mdm_models
     try:
         raw_model = json.loads(model_json_raw) if model_json_raw else None
@@ -852,7 +1111,11 @@ def run_one_job(job_id: str, match_workers: int) -> None:
         raw_model = None
 
     if not raw_model:
-        raw_model = _load_model_config_from_mdm_models(model_id)
+        try:
+            raw_model = _load_model_config_from_mdm_models(model_id)
+        except Exception as e:
+            _set_job_status(job_id, "failed", f"failed_to_load_model_config: {e}")
+            return
 
     model = _normalize_model_json(raw_model)
     if not model:
@@ -860,125 +1123,151 @@ def run_one_job(job_id: str, match_workers: int) -> None:
         return
 
     cfg = _build_cfg(model)
-    if not cfg["selected_fields"]:
+    if not cfg.get("selected_fields"):
         _set_job_status(job_id, "failed", "no match fields with positive weight", total_records=0)
         return
 
-    raw_rows = _load_source_input(app_user_id)
-    if not raw_rows:
-        _set_job_status(job_id, "failed", f"source_input empty for app_user_id={app_user_id}", total_records=0)
+    # STEP 1: bootstrap recon_cluster only if empty for this user+model
+    try:
+        total_recon_rows, inserted = _step1_recon_cluster_sync(app_user_id, model_id)
+    except Exception as e:
+        _set_job_status(job_id, "failed", f"step1_failed: {e}")
         return
 
-    records = _build_records(raw_rows, cfg)
-    total_records = len(records)
+    if inserted > 0:
+        _set_job_status(
+            job_id,
+            "completed",
+            f"bootstrapped_recon_cluster inserted={inserted}",
+            total_records=inserted,
+            total_matches=0,
+            total_clusters=inserted,
+        )
+        return
 
-    _set_job_status(job_id, "running", None, total_records=total_records)
+    # STEP 2: match only NEW source_input rows (not yet present in recon_cluster for this model)
+    src_rows = _load_unprocessed_source_input_rows(app_user_id, model_id)
+    if not src_rows:
+        _set_job_status(
+            job_id,
+            "completed",
+            "no_new_source_input_records",
+            total_records=0,
+            total_matches=0,
+            total_clusters=0,
+        )
+        return
 
-    bucket_lists, exceptions = _make_buckets(records, cfg)
-    total_buckets = len(bucket_lists)
+    model_name = _load_model_name_from_mdm_models(model_id)
+    now = _utc_now_iso()
 
-    tasks = [bucket_lists[i:i + BUCKETS_PER_TASK] for i in range(0, len(bucket_lists), BUCKETS_PER_TASK)]
+    recon_cols = (
+        ["cluster_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
+        + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+        + ["created_at", "created_by", "updated_at", "updated_by", "match_status"]
+    )
+    recon_placeholders = ", ".join(["?"] * len(recon_cols))
 
-    ctx = mp.get_context("fork")  # linux container -> fork is fastest (shared memory)
-    dsu = DSU(total_records)
+    recon_inserts: List[Tuple[Any, ...]] = []
+    map_rows: List[Tuple[Any, ...]] = []
+    exc_rows: List[Tuple[Any, ...]] = []
 
-    pairs_scored = 0
-    matches_found = 0
+    match_count = 0
+    exception_count = 0
+    new_cluster_count = 0
 
-    exc_topk = int(os.environ.get("MATCH_EXCEPTION_TOPK", "20"))
-    possible_cands: Dict[int, Dict[int, float]] = {}
-
-    _init_globals(records, cfg)
-
-with ProcessPoolExecutor(max_workers=match_workers, mp_context=ctx) as ex:
-        futures = [ex.submit(_process_bucket_chunk, chunk) for chunk in tasks]
-        for fut in as_completed(futures):
-            edges, ps, mf, possibles = fut.result()
-            pairs_scored += ps
-            matches_found += mf
-            for a, b in edges:
-                dsu.union(a, b)
-
-            if exc_topk > 0 and possibles:
-                for a, b, score in possibles:
-                    da = possible_cands.get(a)
-                    if da is None:
-                        da = {}
-                        possible_cands[a] = da
-                    prev = da.get(b)
-                    if prev is None or score > prev:
-                        da[b] = score
-                        if len(da) > exc_topk:
-                            worst_b, _ = min(da.items(), key=lambda kv: kv[1])
-                            da.pop(worst_b, None)
-
-                    db = possible_cands.get(b)
-                    if db is None:
-                        db = {}
-                        possible_cands[b] = db
-                    prev = db.get(a)
-                    if prev is None or score > prev:
-                        db[a] = score
-                        if len(db) > exc_topk:
-                            worst_a, _ = min(db.items(), key=lambda kv: kv[1])
-                            db.pop(worst_a, None)
-
-
-    # build clusters (root index -> member indices)
-    clusters: Dict[int, List[int]] = {}
-    for i in range(total_records):
-        root = dsu.find(i)
-        clusters.setdefault(root, []).append(i)
-
-    total_clusters = len(clusters)
-
-    # stable cluster ids scoped by (app_user_id, model_id)
-    existing_map = _load_cluster_map(app_user_id, model_id)
-cluster_ids = _assign_stable_cluster_ids(records, clusters, existing_map)
-
-    # write match_exception (possible matches across clusters)
-    # write match_exception (possible matches across clusters)
     with get_conn() as conn:
+        # rerun safety
         conn.execute("DELETE FROM match_exception WHERE job_id=?", (job_id,))
 
-    if exc_topk > 0 and possible_cands:
-        idx_to_root: List[int] = [0] * total_records
-        for root, members in clusters.items():
-            for idx in members:
-                idx_to_root[idx] = root
+        for r in src_rows:
+            # normalized inputs for match fields
+            norm_by_field: Dict[str, str] = {}
+            for f in cfg["selected_fields"]:
+                norm_by_field[f] = _norm(r[f])
 
-        # dedupe: best score per (record_idx, candidate_cluster_id)
-        best: Dict[Tuple[int, str], Tuple[float, str]] = {}
-        for i, cmap in possible_cands.items():
-            root_i = idx_to_root[i]
-            cluster_i = cluster_ids[root_i]
-            for j, score in cmap.items():
-                root_j = idx_to_root[j]
-                cluster_j = cluster_ids[root_j]
-                if cluster_j == cluster_i:
-                    continue
-                key = (i, cluster_j)
-                prev = best.get(key)
-                cand_rec_id = records[j].record_id
-                if prev is None or score > prev[0]:
-                    best[key] = (score, cand_rec_id)
+            incoming_selected = [norm_by_field[f] for f in cfg["selected_fields"]]
 
-        if best:
-            now = _utc_now_iso()
-            rows = []
-            for (i, cand_cluster_id), (score, cand_rec_id) in best.items():
-                rec = records[i]
-                rows.append(
+            cand_rows = _adaptive_candidates(conn, app_user_id, model_id, cfg, norm_by_field)
+
+            best_score = 0.0
+            best_cluster_id: Optional[str] = None
+            best_source_name: Optional[str] = None
+            best_source_id: Optional[str] = None
+
+            if cand_rows:
+                for c in cand_rows:
+                    cand_selected = [_norm(c[f]) for f in cfg["selected_fields"]]
+                    s = float(weighted_gated_score(incoming_selected, cand_selected, cfg["weights"], cfg["thresholds"]))
+                    if s > best_score:
+                        best_score = s
+                        best_cluster_id = str(c["cluster_id"])
+                        best_source_name = str(c["source_name"])
+                        best_source_id = str(c["source_id"])
+
+            # classification + cluster_id assignment
+            if best_cluster_id and best_score >= float(cfg["model_T"]):
+                match_status = "match"
+                cluster_id = best_cluster_id
+                match_count += 1
+            elif best_cluster_id and best_score >= float(cfg.get("possible_T", 0.0) or 0.0):
+                match_status = "exception"
+                cluster_id = best_cluster_id
+                exception_count += 1
+            else:
+                match_status = "no_match"
+                cluster_id = str(uuid.uuid4())
+                new_cluster_count += 1
+
+            vals: List[Any] = [
+                cluster_id,
+                model_id,
+                model_name,
+                r["source_name"],
+                r["source_id"],
+                app_user_id,
+            ]
+
+            for i in range(1, 21):
+                vals.append(r[f"f{str(i).zfill(2)}"])
+
+            vals.append(r["created_at"])
+            vals.append(r["created_by"])
+            vals.append(r["updated_at"])
+            vals.append(r["updated_by"])
+            vals.append(match_status)
+
+            recon_inserts.append(tuple(vals))
+
+            map_rows.append(
+                (
+                    app_user_id,
+                    model_id,
+                    r["source_name"],
+                    r["source_id"],
+                    cluster_id,
+                    now,
+                    now,
+                )
+            )
+
+            if match_status == "exception" and best_source_name is not None and best_source_id is not None:
+                record_id = _make_record_id(app_user_id, model_id, r["source_name"], r["source_id"])
+                cand_record_id = _make_record_id(app_user_id, model_id, best_source_name, best_source_id)
+
+                exc_rows.append(
                     (
                         job_id,
                         model_id,
-                        rec.record_id,
-                        rec.source_name,
-                        rec.source_id,
-                        cand_cluster_id,
-                        cand_rec_id,
-                        float(score),
-                        "possible_match",
+                        record_id,
+                        r["source_name"],
+                        r["source_id"],
+                        cluster_id,
+                        cand_record_id,
+                        best_source_name,
+                        best_source_id,
+                        float(best_score),
+                        "exception",
                         None,
                         now,
                         None,
@@ -987,39 +1276,61 @@ cluster_ids = _assign_stable_cluster_ids(records, clusters, existing_map)
                     )
                 )
 
-            with get_conn() as conn:
-                conn.executemany(
-                    """
-                    INSERT INTO match_exception (
-                      job_id, model_id,
-                      record_id, source_name, source_id,
-                      candidate_cluster_id, candidate_record_id, score,
-                      reason, details_json,
-                      created_at, resolved_at, resolved_by,
-                      app_user_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
+        if recon_inserts:
+            conn.executemany(
+                f"INSERT INTO recon_cluster ({', '.join(recon_cols)}) VALUES ({recon_placeholders})",
+                recon_inserts,
+            )
+
+        if map_rows:
+            conn.executemany(
+                """
+                INSERT INTO cluster_map (
+                  app_user_id, model_id,
+                  source_name, source_id,
+                  cluster_id,
+                  first_seen_at, last_seen_at
                 )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(app_user_id, model_id, source_name, source_id) DO UPDATE SET
+                  cluster_id = excluded.cluster_id,
+                  last_seen_at = excluded.last_seen_at
+                """,
+                map_rows,
+            )
 
-
-
-    # write recon_cluster + cluster_map
-    _write_outputs(job_id, app_user_id, model_id, records, clusters, cluster_ids)
-
-    # survivorship + golden + representative flags
-    _write_survivorship(job_id, app_user_id, model_id, model)
+        if exc_rows:
+            conn.executemany(
+                """
+                INSERT INTO match_exception (
+                  job_id, model_id,
+                  record_id, source_name, source_id,
+                  candidate_cluster_id, candidate_record_id, candidate_source_name, candidate_source_id, score,
+                  reason, details_json,
+                  created_at, resolved_at, resolved_by,
+                  app_user_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                exc_rows,
+            )
 
     _set_job_status(
         job_id,
         "completed",
-        None,
-        total_buckets=total_buckets,
-        total_pairs_scored=pairs_scored,
-        total_matches=matches_found,
-        total_clusters=total_clusters,
-        exceptions_json=json.dumps(exceptions[:50]),
+        f"processed={len(src_rows)} match={match_count} exception={exception_count} new_clusters={new_cluster_count}",
+        total_records=len(src_rows),
+        total_matches=match_count,
+        total_clusters=new_cluster_count,
+        exceptions_json=json.dumps(
+            {
+                "exception_count": exception_count,
+                "candidate_target": MATCH_CANDIDATE_TARGET,
+                "blocking_max_prefix_len": MATCH_BLOCK_MAX_PREFIX_LEN,
+                "blocking_fields_by_weight": cfg.get("blocking_fields") or [],
+            }
+        ),
     )
+
 
 
 def _job_process_entry(job_id: str, match_workers: int) -> None:

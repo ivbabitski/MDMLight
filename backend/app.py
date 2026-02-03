@@ -27,6 +27,7 @@ def create_app() -> Flask:
     from apis.mdm_model_api import bp as mdm_model_bp
     from apis.source_input_api import bp as source_input_bp
     from apis.source_systems_api import bp as source_systems_bp
+    from apis.matching_summary_api import bp as matching_summary_bp
 
     app.register_blueprint(system_bp)
     app.register_blueprint(ingestion_bp)
@@ -36,6 +37,8 @@ def create_app() -> Flask:
     app.register_blueprint(mdm_model_bp)
     app.register_blueprint(source_input_bp)
     app.register_blueprint(source_systems_bp)
+    app.register_blueprint(matching_summary_bp)
+
 
     return app
 

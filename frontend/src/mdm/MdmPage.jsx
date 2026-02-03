@@ -269,6 +269,8 @@ export default function MdmPage() {
 
   const [promoted, setPromoted] = useState({}); // uiKey -> boolean (exceptions view)
 
+
+
   const job = MOCK_JOB;
 
   const totalSourceRecords = useMemo(() => Number(sourceSummary?.total_records || 0), [sourceSummary]);
@@ -703,7 +705,7 @@ export default function MdmPage() {
                 <div className="mdmDivider" />
 
                 <div className="mdmSectionTitle">Fields</div>
-                <div className="mdmPillRow">
+                <div className="mdmPillRow mdmFieldsHover">
                   {sourceFieldLabels.length === 0 ? (
                     <span className="mdmPillSoft">—</span>
                   ) : sourceFieldLabels.length <= 6 ? (
@@ -715,13 +717,19 @@ export default function MdmPage() {
                       {sourceFieldLabels.slice(0, 4).map((lbl) => (
                         <span className="mdmPillSoft" key={lbl}>{lbl}</span>
                       ))}
-                      <span className="mdmPillSoft">…</span>
+
+                      <span className="mdmPillSoft mdmFieldsEllipsis">…</span>
+
+                      <span className="mdmFieldsExtra">
+                        {sourceFieldLabels.slice(4, -1).map((lbl) => (
+                          <span className="mdmPillSoft" key={lbl}>{lbl}</span>
+                        ))}
+                      </span>
+
                       <span className="mdmPillSoft">{sourceFieldLabels[sourceFieldLabels.length - 1]}</span>
                     </>
                   )}
                 </div>
-
-
 
               </div>
             </div>

@@ -89,6 +89,45 @@ def conservative_match(a: Optional[str], b: Optional[str], threshold: float) -> 
     return (sim >= t), sim, d
 
 
+def weighted_gated_score(
+    a_values,
+    b_values,
+    weights,
+    thresholds,
+) -> float:
+    """
+    Weighted + gated scoring used by your match model.
+
+    For each field i:
+      - compute sim_i using conservative_similarity()
+      - if sim_i < threshold_i -> contribution_i = 0
+      - else contribution_i = sim_i * weight_i
+
+    total_score = sum(contribution_i)
+
+    Notes:
+      - weights are expected to be normalized (sum ~= 1.0) by the caller
+      - thresholds can be 0..1 or 0..100 (same as conservative_match)
+    """
+    score = 0.0
+
+    for a, b, w, t in zip(a_values, b_values, weights, thresholds):
+        try:
+            wv = float(w)
+        except Exception:
+            continue
+
+        if wv <= 0.0:
+            continue
+
+        ok, sim, _ = conservative_match(a, b, t)
+        if ok:
+            score += float(sim) * wv
+
+    return float(score)
+
+
+
 if __name__ == "__main__":
     tests = [("cat", "bat"), ("grab", "crab"), ("cat", "cater")]
     for x, y in tests:

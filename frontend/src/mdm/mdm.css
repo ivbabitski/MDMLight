@@ -455,6 +455,20 @@
   padding: 12px 12px;
 }
 
+/* MDM models overlay: fix sticky Actions header height + prevent JSON from forcing horizontal layout */
+.mdmModelsTable .mdmTHead,
+.mdmModelsTable .mdmTRow{
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.mdmModelsTable .mdmTHead > div,
+.mdmModelsTable .mdmTRow > div{
+  padding-top: 12px;
+  padding-bottom: 12px;
+  min-width: 0;
+}
+
 .mdmTableBody{
   max-height: 420px;
   overflow-y: auto;
@@ -938,6 +952,39 @@
   color: rgba(130, 28, 41, 0.95);
 }
 
+.mdmFieldsHover .mdmFieldsExtra{
+  display: none;
+}
+
+.mdmFieldsHover:hover .mdmFieldsExtra{
+  display: contents;
+}
+
+.mdmFieldsHover:hover .mdmFieldsEllipsis{
+  display: none;
+}
+
+.mdmFieldsEllipsis{
+  cursor: default;
+}
+
+.mdmPillSoft--btn{
+  cursor: pointer;
+  user-select: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.mdmPillSoft--btn:hover{
+  background: var(--panel2);
+}
+
+.mdmPillSoft--btn:focus-visible{
+  outline: 2px solid rgba(209,74,74,0.35);
+  outline-offset: 2px;
+}
+
+
 .mdmBarList{
   display:grid;
   gap: 8px;
@@ -959,13 +1006,16 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
 .mdmBarTrack{
   height: 10px;
   border-radius: 999px;
   background: var(--panel2);
   border: 1px solid var(--border);
   overflow:hidden;
+  margin-left: clamp(8px, 2vw, 26px);
 }
+
 .mdmBarFill{
   display:block;
   height: 100%;
@@ -1096,11 +1146,18 @@
   color: rgba(17,24,39,0.86);
 }
 
+.mdmBtn--run{
+  background: rgba(34,197,94,0.12);
+  border-color: rgba(34,197,94,0.24);
+  color: rgba(20,83,45,1);
+}
+
 .mdmBtn--danger{
   background: rgba(239,68,68,0.10);
   border-color: rgba(239,68,68,0.24);
   color: rgba(127,29,29,1);
 }
+
 
 .mdmPre{
   margin: 0;
@@ -1218,6 +1275,14 @@
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* MDM models overlay: compact action buttons without affecting other pages */
+.mdmModelsTable .mdmBtn--xs{
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
 
 .mdmWideEmpty{
   padding: 14px 12px;

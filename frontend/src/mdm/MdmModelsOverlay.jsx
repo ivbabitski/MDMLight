@@ -59,15 +59,18 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
   const [error, setError] = useState("");
   const [models, setModels] = useState([]);
   const [deletingId, setDeletingId] = useState("");
+  const [runningId, setRunningId] = useState("");
 
   const [sortKey, setSortKey] = useState("id"); // id | name | created
   const [sortDir, setSortDir] = useState("asc"); // asc | desc
 
+
   const [jsonOpenId, setJsonOpenId] = useState("");
 
   const userLabel = String(currentUser || getAuthUsername() || "").trim();
-  const COLS = "minmax(200px, 320px) minmax(420px, 1fr) 160px 200px 200px 260px";
+  const COLS = "minmax(160px, 280px) minmax(260px, 1fr) 140px 180px 180px 260px";
   const HEAD_BG = "#f6f7f9";
+
 
   function applySort(nextKey) {
 
@@ -180,10 +183,44 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
     }
   }
 
+  async function runModel(model) {
+    if (!model || !model.id) return;
+
+    const userId = getAuthUserId();
+    if (!userId) {
+      setError("X-User-Id (app_user_id) is required to run a model.");
+      return;
+    }
+
+    setRunningId(String(model.id));
+    setError("");
+
+    try {
+      const res = await fetch(apiUrl("/match/run"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-User-Id": String(userId) },
+        body: JSON.stringify({ model_id: String(model.id) }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `Failed to run model (${res.status})`);
+      }
+
+      setError(`Run queued (job_id: ${data.job_id})`);
+    } catch (e) {
+      setError(String(e?.message || e));
+    } finally {
+      setRunningId("");
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     loadModels();
   }, [open]);
+
 
   if (!open) return null;
 
@@ -212,7 +249,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
             </div>
           </div>
 
-          <div className="mdmTable" style={{ overflowX: jsonOpenId ? "hidden" : "auto", position: "relative" }}>
+          <div className="mdmTable mdmModelsTable" style={{ overflowX: "auto", position: "relative" }}>
 
             <div
               className="mdmTHead"
@@ -255,15 +292,8 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                   position: "sticky",
                   right: 0,
                   zIndex: 3,
-                  background: HEAD_BG,
+                  background: "inherit",
                   borderLeft: "1px solid var(--border, rgba(0,0,0,0.12))",
-                  borderBottom: "1px solid var(--border, rgba(0,0,0,0.10))",
-                  padding: "6px 8px",
-                  width: "100%",
-                  height: "100%",
-                  boxSizing: "border-box",
-                  alignSelf: "stretch",
-                  justifySelf: "stretch",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -271,6 +301,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
               >
                 Actions
               </div>
+
             </div>
 
             
@@ -319,8 +350,9 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                         <div
                           style={{
                             display: "flex",
-                            gap: 6,
-                            justifyContent: "flex-end",
+                            gap: 4,
+                            justifyContent: "center",
+                            alignItems: "center",
                             flexWrap: "nowrap",
                             position: "sticky",
                             right: 0,
@@ -329,6 +361,15 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                             borderLeft: "1px solid var(--border, rgba(0,0,0,0.12))",
                           }}
                         >
+                          <button
+                            className="mdmBtn mdmBtn--run mdmBtn--xs"
+                            type="button"
+                            onClick={() => runModel(m)}
+                            disabled={runningId === String(m.id || "")}
+                          >
+                            {runningId === String(m.id || "") ? "Running..." : "Run"}
+                          </button>
+
                           <a
                             className="mdmBtn mdmBtn--ghost mdmBtn--xs"
                             href="#"
@@ -373,6 +414,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                               className="mdmPre"
                               style={{
                                 margin: 0,
+                                width: "100%",
                                 maxHeight: 260,
                                 overflowY: "auto",
                                 overflowX: "hidden",
@@ -384,6 +426,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                             >
                               {safeJson(m)}
                             </pre>
+
 
                           </div>
                         </div>

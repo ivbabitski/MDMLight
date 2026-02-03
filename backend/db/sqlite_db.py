@@ -720,37 +720,52 @@ def init_recon_cluster() -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS recon_cluster (
-              job_id TEXT NOT NULL,
-              model_id TEXT,
-
               cluster_id TEXT NOT NULL,
+              model_id TEXT NOT NULL,
+              model_name TEXT NOT NULL,
 
-              record_id TEXT NOT NULL,
               source_name TEXT NOT NULL,
               source_id TEXT NOT NULL,
 
-              cluster_size INTEGER NOT NULL,
-              is_representative INTEGER NOT NULL DEFAULT 0,
+              app_user_id INTEGER NOT NULL REFERENCES users(id),
+
+              f01 TEXT, f02 TEXT, f03 TEXT, f04 TEXT, f05 TEXT,
+              f06 TEXT, f07 TEXT, f08 TEXT, f09 TEXT, f10 TEXT,
+              f11 TEXT, f12 TEXT, f13 TEXT, f14 TEXT, f15 TEXT,
+              f16 TEXT, f17 TEXT, f18 TEXT, f19 TEXT, f20 TEXT,
 
               created_at TEXT NOT NULL,
+              created_by TEXT NOT NULL,
+              updated_at TEXT,
+              updated_by TEXT,
 
-              app_user_id INTEGER REFERENCES users(id),
-              PRIMARY KEY (job_id, record_id)
+              match_status TEXT NOT NULL DEFAULT 'match',
+              exceptions_status TEXT,
+              assign_to_cluster TEXT,
+
+              PRIMARY KEY (cluster_id, model_id, source_name, source_id, app_user_id)
             )
             """
         )
-        _ensure_app_user_id(conn, "recon_cluster")
-        _ensure_column(conn, "recon_cluster", "model_id", "model_id TEXT")
+
+        _ensure_column(conn, "recon_cluster", "match_status", "match_status TEXT NOT NULL DEFAULT 'match'")
+        _ensure_column(conn, "recon_cluster", "exceptions_status", "exceptions_status TEXT")
+        _ensure_column(conn, "recon_cluster", "assign_to_cluster", "assign_to_cluster TEXT")
 
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_job_cluster ON recon_cluster(job_id, cluster_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_cluster_id ON recon_cluster(cluster_id)"
+            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model_status ON recon_cluster(app_user_id, model_id, match_status)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model ON recon_cluster(app_user_id, model_id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model_source ON recon_cluster(app_user_id, model_id, source_name, source_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_cluster_id ON recon_cluster(cluster_id)"
+        )
+
+
 
 
 
@@ -862,6 +877,8 @@ def init_golden_record() -> None:
               match_threshold REAL NOT NULL,
               survivorship_json TEXT NOT NULL,
               representative_record_id TEXT NOT NULL,
+              representative_source_name TEXT,
+              representative_source_id TEXT,
               lineage_json TEXT,
 
               f01 TEXT, f02 TEXT, f03 TEXT, f04 TEXT, f05 TEXT,
@@ -880,6 +897,8 @@ def init_golden_record() -> None:
         )
         _ensure_app_user_id(conn, "golden_record")
         _ensure_column(conn, "golden_record", "model_id", "model_id TEXT")
+        _ensure_column(conn, "golden_record", "representative_source_name", "representative_source_name TEXT")
+        _ensure_column(conn, "golden_record", "representative_source_id", "representative_source_id TEXT")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_golden_record_job_id ON golden_record(job_id)"
@@ -887,6 +906,7 @@ def init_golden_record() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_golden_record_user_model ON golden_record(app_user_id, model_id)"
         )
+
 
 def init_match_exception() -> None:
     with get_conn() as conn:
@@ -902,6 +922,8 @@ def init_match_exception() -> None:
 
               candidate_cluster_id TEXT NOT NULL,
               candidate_record_id TEXT,
+              candidate_source_name TEXT,
+              candidate_source_id TEXT,
               score REAL,
 
               reason TEXT NOT NULL,
@@ -918,10 +940,14 @@ def init_match_exception() -> None:
         )
         _ensure_app_user_id(conn, "match_exception")
         _ensure_column(conn, "match_exception", "model_id", "model_id TEXT")
+        _ensure_column(conn, "match_exception", "candidate_source_name", "candidate_source_name TEXT")
+        _ensure_column(conn, "match_exception", "candidate_source_id", "candidate_source_id TEXT")
 
         conn.execute("CREATE INDEX IF NOT EXISTS ix_match_exception_job ON match_exception(job_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_match_exception_candidate_cluster ON match_exception(candidate_cluster_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_match_exception_user_model ON match_exception(app_user_id, model_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_match_exception_user_model_record ON match_exception(app_user_id, model_id, source_name, source_id)")
+
 
 
 def init_all_tables() -> None:

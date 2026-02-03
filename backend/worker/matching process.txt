@@ -1,0 +1,119 @@
+1) Inputs
+
+source_input = new incoming records
+
+recon_cluster = existing clustered records
+
+if empty → bootstrap it from source_input (each record starts as its own cluster)
+
+mdm_model (JSON) defines:
+
+matchFieldCodes
+
+per-field weight + matchThreshold (field gate)
+
+model matchThreshold + possibleThreshold
+
+2) Candidate generation (blocking) — schema-agnostic, weight-driven
+
+Goal: get a small candidate set from recon_cluster for each source_input record before Levenshtein scoring.
+
+Sort matchFieldCodes by weight desc
+
+Start with top 2 fields (expand to top 3–4 only if needed)
+
+Build adaptive prefix block keys using normalized values (lowercase, trim, strip punctuation)
+
+Adaptive tightening (until candidate count ≤ target, e.g., 1000):
+
+1 char(top1) + 1 char(top2)
+
+if too many → 2 + 1
+
+if too many → 2 + 2
+
+if too many → 3 + 2
+
+keep increasing prefix lengths until under target
+
+Notes:
+
+If a field is missing/too short → skip it and use next weighted field
+
+Token-aware prefixes when possible (e.g., last token for last name)
+
+Needs precomputed/indexed block keys in recon_cluster for speed
+
+IMPORTANT: candidates must come from non-exception members only (exceptions are never used for matching)
+
+3) Scoring (Levenshtein model)
+
+For each candidate cluster:
+
+For each field in matchFieldCodes:
+
+compute sim = levenshtein_similarity(a, b) in 0..1
+
+field gate:
+
+if sim < field.matchThreshold → contribution = 0
+
+else contribution = sim * weight
+
+total = Σ(contribution_i) (weights sum ~1.0)
+
+Pick best candidate = max total.
+
+4) Classification
+
+if total >= model.matchThreshold → match
+
+else if model.possibleThreshold <= total < model.matchThreshold → exception
+
+else → no match
+
+5) Output actions (UPDATED)
+
+Every record gets a cluster_id:
+
+match:
+
+assign cluster_id = best_candidate_cluster_id
+
+set match_status = match
+
+exception:
+
+assign cluster_id = best_candidate_cluster_id
+
+set match_status = exception
+
+also write to exceptions table/queue for review
+
+no match:
+
+create new cluster (single-record cluster)
+
+assign cluster_id = new_cluster_id
+
+set match_status = new/no_match
+
+
+
+
+
+
+
+######## Things to keep in mind #######
+
+conservative_match is field-level only: for each field it returns (pass/fail, similarity, distance) using your min(len) normalization. 
+
+levenshtein
+
+The gated model is record-level: it takes those per-field results and decides match / exception / no_match using the weights + model thresholds. 
+
+matching process
+
+Weight = 0 means that field must not affect the final model score (so it shouldn’t help you reach matchThreshold). 
+
+matching process
