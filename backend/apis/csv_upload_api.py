@@ -215,10 +215,11 @@ def ingest_csv():
     ) VALUES (
       {placeholders}
     )
-    ON CONFLICT(source_id) DO UPDATE SET
+    ON CONFLICT(app_user_id, source_name, source_id) DO UPDATE SET
       {update_set}
     WHERE source_input.app_user_id IS NULL OR source_input.app_user_id = excluded.app_user_id;
     """
+
 
     params = []
     row_count = 0

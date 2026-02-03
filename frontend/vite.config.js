@@ -5,7 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/auth": "http://localhost:5000",
+      "/auth": "http://api:5000",
+      "/mdm": "http://api:5000",
+      "/api": "http://api:5000",
+      "/ingest": "http://api:5000",
     },
   },
 });

@@ -19,6 +19,15 @@ def _norm_key(x: Any) -> str:
     return str(x).strip().lower()
 
 
+def _esc_pipe(s: Any) -> str:
+    # keep record_id unambiguous even if source_name/source_id contain "|"
+    return str(s or "").replace("|", "||")
+
+
+def _make_record_id(source_name: Any, source_id: Any) -> str:
+    return f"{_esc_pipe(source_name)}|{_esc_pipe(source_id)}"
+
+
 def _parse_dt(x: Any) -> Optional[datetime]:
     if x is None:
         return None
@@ -115,7 +124,7 @@ class SourceRow:
 
 def _load_source_rows(app_user_id: Optional[int] = None) -> Dict[str, SourceRow]:
     """
-    source_input does NOT have an `id` column. We use source_name::source_id as record_id.
+    source_input does NOT have an `id` column. We use _make_record_id(source_name, source_id) using "|" (escaped).
     """
     cols = ["source_id", "source_name"] + [f"f{str(i).zfill(2)}" for i in range(1, 21)] + [
         "created_at", "created_by", "updated_at", "updated_by"
@@ -134,7 +143,7 @@ def _load_source_rows(app_user_id: Optional[int] = None) -> Dict[str, SourceRow]
         rows = conn.execute(sql, params).fetchall()
 
     for r in rows:
-        record_id = f"{r['source_name']}::{r['source_id']}"
+        record_id = _make_record_id(r["source_name"], r["source_id"])
         f20 = [r[f"f{str(i).zfill(2)}"] for i in range(1, 21)]
         c_at = r["created_at"]
         u_at = r["updated_at"]
@@ -159,6 +168,7 @@ def _load_source_rows(app_user_id: Optional[int] = None) -> Dict[str, SourceRow]
         )
 
     return out
+
 
 
 def _load_job_model(job_id: str) -> Dict[str, Any]:

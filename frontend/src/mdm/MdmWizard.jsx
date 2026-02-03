@@ -3,6 +3,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { getUserId } from "../authStorage";
 
+const LS_SELECTED_MODEL_ID = "mdm_selected_model_id";
+
+
 
 const TYPE_OPTIONS = [
   { value: "email", label: "Email" },
@@ -315,6 +318,8 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
   // Model meta (label + stable id)
   const [domainModelName, setDomainModelName] = useState("");
+  const [editingModelId, setEditingModelId] = useState(null); // string | null
+
 
   // Step 1 — source
   const [sourceType, setSourceType] = useState("csv"); // csv | api
@@ -534,10 +539,11 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
   const modelNameOk =
     modelNameTrimmed.length > 0 && /^[A-Za-z0-9_-]+$/.test(modelNameTrimmed);
 
-  const sourceOk =
-    sourceType === "csv"
-      ? Boolean(csvFileName) && !!csvFile
-      : apiEndpoint.trim().length > 0 && apiToken.trim().length > 0;
+const sourceOk =
+  sourceType === "csv"
+    ? Boolean(csvFileName) && (csvUploaded || !!csvFile)
+    : apiEndpoint.trim().length > 0 && apiToken.trim().length > 0;
+
 
   const step1Ok = modelNameOk && sourceOk;
 
@@ -556,16 +562,198 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     return "";
   }, [actorProp]);
 
-  const apiBase = useMemo(() => {
-    const env = (import.meta.env.VITE_API_URL || "").trim();
-    const raw = String(apiBaseUrl || env || "").trim();
-    return raw.endsWith("/") ? raw.slice(0, -1) : raw;
-  }, [apiBaseUrl]);
+const apiBase = useMemo(() => {
+  const env = (import.meta.env.VITE_API_URL || "").trim();
+  const raw = String(apiBaseUrl || env || "").trim();
 
-  useEffect(() => {
-    if (!open) return;
-    if (step !== 2) return;
-    if (globalRule !== "system") return;
+  if (raw) return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+
+  if (typeof window === "undefined") return "";
+  const proto = window.location.protocol || "http:";
+  const host = window.location.hostname || "localhost";
+  return `${proto}//${host}:5000`;
+}, [apiBaseUrl]);
+
+
+function applyLoadedModelConfig(modelId, cfg) {
+  const safe = (v) => (v === null || v === undefined ? "" : String(v));
+
+  setEditingModelId(String(modelId || "").trim() || null);
+
+  setConfigured(false);
+  setSaveSuccess(null);
+  setSaveError("");
+
+  setDomainModelName(safe(cfg?.domainModelName).trim());
+
+  const st = String(cfg?.sourceType || "csv").trim().toLowerCase();
+  setSourceType(st === "api" ? "api" : "csv");
+
+  setCsvFileName(safe(cfg?.csvFileName));
+  setCsvFile(null);
+  setCsvUploading(false);
+  setCsvUploaded(st !== "api" && Boolean(safe(cfg?.csvFileName)));
+  setCsvUploadError("");
+  setCsvUploadRows(0);
+
+  setRecordCount(Number(cfg?.recordCount || 0) || 0);
+
+  setApiEndpoint(safe(cfg?.apiEndpoint) || "http://localhost:5000/api/ingest");
+  setApiToken(safe(cfg?.apiToken));
+
+  setAiExceptions(Boolean(cfg?.aiExceptions));
+
+  setMatchThreshold(Number(cfg?.matchThreshold || 0.85) || 0.85);
+  setPossibleThreshold(Number(cfg?.possibleThreshold || 0.7) || 0.7);
+
+  setAdvanced(Boolean(cfg?.advanced));
+  setGlobalRule(safe(cfg?.globalRule) || "recency_updated_date");
+
+  setSystemPriority(
+    Array.isArray(cfg?.systemPriority)
+      ? cfg.systemPriority.map((x) => safe(x).trim()).filter(Boolean)
+      : [""]
+  );
+  setUserPriority(
+    Array.isArray(cfg?.userPriority)
+      ? cfg.userPriority.map((x) => safe(x).trim()).filter(Boolean)
+      : [""]
+  );
+
+  setSpecificValuePriority(() => {
+    const rows = Array.isArray(cfg?.specificValuePriority) ? cfg.specificValuePriority : [];
+    const norm = rows
+      .map((r) => ({
+        id: uid("sv"),
+        fieldCode: safe(r?.fieldCode).trim(),
+        value: safe(r?.value),
+      }))
+      .filter((r) => r.fieldCode || r.value);
+    return norm.length > 0 ? norm : [{ id: uid("sv"), fieldCode: "", value: "" }];
+  });
+
+  setRunModelAfterSave(Boolean(cfg?.runModelAfterSave));
+
+  setMatchFieldCodes(
+    Array.isArray(cfg?.matchFieldCodes)
+      ? cfg.matchFieldCodes.map((c) => safe(c).trim()).filter(Boolean)
+      : []
+  );
+  setMatchFieldPick("");
+
+  // Fields: merge defaults with loaded fields (by code)
+  const loadedFields = Array.isArray(cfg?.fields) ? cfg.fields : [];
+  const byCode = new Map(
+    loadedFields
+      .map((f) => ({ ...f, code: safe(f?.code).trim() }))
+      .filter((f) => f.code)
+      .map((f) => [f.code, f])
+  );
+
+  const used = new Set();
+
+  function mapField(f) {
+    const code = safe(f?.code).trim();
+    return {
+      id: safe(f?.id).trim() || uid("f"),
+      code,
+      label: safe(f?.label),
+      kind: safe(f?.kind).trim() || "flex",
+      include: Boolean(f?.include),
+      key: Boolean(f?.key),
+      type: safe(f?.type).trim() || "text",
+      weight: Number(f?.weight || 0) || 0,
+      rule: f?.rule,
+      matchThreshold: f?.matchThreshold,
+    };
+  }
+
+  const merged = [];
+
+  for (const df of DEFAULT_FIELDS) {
+    const hit = byCode.get(df.code);
+    if (hit) {
+      merged.push(mapField(hit));
+      used.add(df.code);
+    } else {
+      merged.push({ ...df, id: uid("f") });
+      used.add(df.code);
+    }
+  }
+
+  for (const lf of loadedFields) {
+    const code = safe(lf?.code).trim();
+    if (!code || used.has(code)) continue;
+    merged.push(mapField(lf));
+    used.add(code);
+  }
+
+  setFields(merged);
+}
+
+useEffect(() => {
+  if (!open) return;
+
+  let id = "";
+  try {
+    id = String(window.localStorage?.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+  } catch {
+    id = "";
+  }
+
+  if (!id) {
+    setEditingModelId(null);
+    return;
+  }
+
+  const userId = getUserId();
+  if (!userId) {
+    setSaveError("No user id found in authStorage (treat as logged out)");
+    return;
+  }
+
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const url = `${apiBase}/mdm/models/${encodeURIComponent(id)}`;
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          "X-User-Id": String(userId),
+          Accept: "application/json",
+        },
+      });
+
+      const out = await res.json().catch(() => ({}));
+
+      if (!res.ok || !out?.ok) {
+        if (!cancelled) setSaveError(out?.error || `Failed to load model (${res.status})`);
+        return;
+      }
+
+      const cfg = out?.model?.config;
+      if (!cfg || typeof cfg !== "object") {
+        if (!cancelled) setSaveError("Loaded model is missing config");
+        return;
+      }
+
+      if (cancelled) return;
+      applyLoadedModelConfig(id, cfg);
+    } catch (e) {
+      if (!cancelled) setSaveError(String(e?.message || e));
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [open, apiBase]);
+
+useEffect(() => {
+  if (!open) return;
+  if (step !== 2) return;
+  if (globalRule !== "system") return;
 
     const userId = getUserId();
     if (!userId) {
@@ -717,23 +905,20 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
     const config = buildMdmConfig(effectiveFields);
 
-    const url = `${apiBase}/mdm/models`;
+    const url = editingModelId
+      ? `${apiBase}/mdm/models/${encodeURIComponent(String(editingModelId))}`
+      : `${apiBase}/mdm/models`;
 
     setSavingModel(true);
     try {
       const res = await fetch(url, {
-        method: "POST",
+        method: editingModelId ? "PUT" : "POST",
         headers: {
           "Content-Type": "application/json",
           "X-User-Id": String(userId),
         },
-        body: JSON.stringify({
-          actor,
-          model_name: name,
-          config,
-        }),
+        body: JSON.stringify({ actor, model_name: name, config }),
       });
-
 
       const out = await res.json().catch(() => ({}));
 
@@ -753,8 +938,6 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
   }
 
 
-
-
   async function copyToClipboard(text, key) {
     if (!text) return;
     try {
@@ -765,6 +948,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
       // ignore
     }
   }
+
 
   function rotateToken() {
     setApiToken(randomToken(16));
@@ -1071,7 +1255,12 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     if (!saved) return;
 
     const createdName = String(saved?.model_name || domainModelName || "").trim() || "Model";
-    const createdId = saved?.id ?? null;
+    const createdId = saved?.id ?? editingModelId ?? null;
+
+    try {
+      const sid = createdId != null ? String(createdId).trim() : "";
+      if (sid) window.localStorage?.setItem(LS_SELECTED_MODEL_ID, sid);
+    } catch {}
 
     if (!advanced) {
       setFields((prev) => prev.map((f) => (f.include ? { ...f, rule: globalRule } : f)));
@@ -1079,6 +1268,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
     setConfigured(true);
     setSaveSuccess({ name: createdName, id: createdId });
+
   }
 
 
@@ -1089,6 +1279,13 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     if (step === 0 && sourceType === "csv") {
       if (csvUploading) return;
 
+      // If we already uploaded a CSV for this wizard session (or loaded an existing model),
+      // don't force a re-upload unless the user picked a new file.
+      if (csvUploaded && !csvFile) {
+        setStep(1);
+        return;
+      }
+
       setCsvUploadError("");
       setCsvUploaded(false);
       setCsvUploadRows(0);
@@ -1097,6 +1294,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
         setCsvUploadError("No CSV file selected");
         return;
       }
+
 
       const userId = getUserId();
       if (!userId) {

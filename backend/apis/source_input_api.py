@@ -43,69 +43,74 @@ def source_input_summary():
         return jsonify({"error": "model_id is required"}), 400
 
 
+    model_id = str(request.args.get("model_id") or "").strip()
+
     with get_conn() as conn:
-        # Load model config to map f01..f20 => labels
-        try:
-            row = conn.execute(
-                """
-                SELECT id, config_json, owner_user_id, app_user_id
-                FROM mdm_models
-                WHERE id = ?
-                LIMIT 1
-                """,
-                (model_id,),
-            ).fetchone()
-        except Exception:
-            row = None
-
-        if not row:
-            return jsonify({"error": "model not found"}), 404
-
-        try:
-            owner_id = row["owner_user_id"] if hasattr(row, "keys") else row[2]
-        except Exception:
-            owner_id = None
-        try:
-            model_app_user_id = row["app_user_id"] if hasattr(row, "keys") else row[3]
-        except Exception:
-            model_app_user_id = None
-
-        # Multi-user safety: model must belong to the current user.
-        if owner_id is not None and int(owner_id) != int(app_user_id):
-            return jsonify({"error": "model does not belong to user"}), 403
-        if model_app_user_id is not None and int(model_app_user_id) != int(app_user_id):
-            return jsonify({"error": "model does not belong to user"}), 403
-
-        try:
-            cfg_raw = row["config_json"] if hasattr(row, "keys") else row[1]
-            model_cfg = json.loads(cfg_raw or "{}") if cfg_raw else {}
-        except Exception:
-            model_cfg = {}
-
-        # Support both shapes: {config:{fields:[...]}} or {fields:[...]}.
-        cfg_obj = model_cfg.get("config") if isinstance(model_cfg, dict) else None
-        if isinstance(cfg_obj, dict):
-            fields_arr = cfg_obj.get("fields")
-        else:
-            fields_arr = model_cfg.get("fields") if isinstance(model_cfg, dict) else None
-
         code_to_label = {}
-        if isinstance(fields_arr, list):
-            for f in fields_arr:
-                if not isinstance(f, dict):
-                    continue
-                code = str(f.get("code") or "").strip()
-                label = str(f.get("label") or "").strip()
-                if not code or not label:
-                    continue
-                # Filter out generic labels like f01/f02 (or label==code)
-                c_lo = code.lower()
-                l_lo = label.lower()
-                if l_lo == c_lo:
-                    continue
-                if l_lo.startswith("f") and l_lo[1:].isdigit():
-                    continue
-                code_to_label[code] = label
+
+        if model_id:
+            # Load model config to map f01..f20 => labels
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, config_json, owner_user_id, app_user_id
+                    FROM mdm_models
+                    WHERE id = ?
+                    LIMIT 1
+                    """,
+                    (model_id,),
+                ).fetchone()
+            except Exception:
+                row = None
+
+            if not row:
+                return jsonify({"error": "model not found"}), 404
+
+            try:
+                owner_id = row["owner_user_id"] if hasattr(row, "keys") else row[2]
+            except Exception:
+                owner_id = None
+            try:
+                model_app_user_id = row["app_user_id"] if hasattr(row, "keys") else row[3]
+            except Exception:
+                model_app_user_id = None
+
+            # Multi-user safety: model must belong to the current user.
+            if owner_id is not None and int(owner_id) != int(app_user_id):
+                return jsonify({"error": "model does not belong to user"}), 403
+            if model_app_user_id is not None and int(model_app_user_id) != int(app_user_id):
+                return jsonify({"error": "model does not belong to user"}), 403
+
+            try:
+                cfg_raw = row["config_json"] if hasattr(row, "keys") else row[1]
+                model_cfg = json.loads(cfg_raw or "{}") if cfg_raw else {}
+            except Exception:
+                model_cfg = {}
+
+            # Support both shapes: {config:{fields:[...]}} or {fields:[...]}.
+            cfg_obj = model_cfg.get("config") if isinstance(model_cfg, dict) else None
+            if isinstance(cfg_obj, dict):
+                fields_arr = cfg_obj.get("fields")
+            else:
+                fields_arr = model_cfg.get("fields") if isinstance(model_cfg, dict) else None
+
+            if isinstance(fields_arr, list):
+                for f in fields_arr:
+                    if not isinstance(f, dict):
+                        continue
+                    code = str(f.get("code") or "").strip()
+                    label = str(f.get("label") or "").strip()
+                    if not code or not label:
+                        continue
+                    # Filter out generic labels like f01/f02 (or label==code)
+                    c_lo = code.lower()
+                    l_lo = label.lower()
+                    if l_lo == c_lo:
+                        continue
+                    if l_lo.startswith("f") and l_lo[1:].isdigit():
+                        continue
+                    code_to_label[code] = label
+
 
         # Which sqlite file is this endpoint actually reading?
         db_file = ""
@@ -228,6 +233,18 @@ def source_input_summary():
 
     field_pills = [x["label"] for x in labeled_fields]
 
+    labeled_fields = []
+    for fs in field_stats:
+        k = str(fs.get("key") or "").strip()
+        if not k:
+            continue
+        lbl = code_to_label.get(k)
+        if not lbl:
+            continue
+        labeled_fields.append({"code": k, "label": lbl, "non_empty": int(fs.get("non_empty") or 0)})
+
+    field_pills = [x["label"] for x in labeled_fields]
+
     return jsonify(
         {
             "total_records": total_records,
@@ -243,4 +260,5 @@ def source_input_summary():
             "table_cols": table_cols,
         }
     )
+
 

@@ -43,6 +43,15 @@ def _norm(s: Any) -> str:
     return s
 
 
+def _esc_pipe(s: Any) -> str:
+    # keep record_id unambiguous even if source_name/source_id contain "|"
+    return str(s or "").replace("|", "||")
+
+
+def _make_record_id(source_name: Any, source_id: Any) -> str:
+    return f"{_esc_pipe(source_name)}|{_esc_pipe(source_id)}"
+
+
 def _to_0_1(x: Any, default: float = 0.0) -> float:
     if x is None:
         return default
@@ -57,6 +66,7 @@ def _to_0_1(x: Any, default: float = 0.0) -> float:
     if v > 1.0:
         v = 1.0
     return v
+
 
 
 def _is_f_code(code: Any) -> bool:
@@ -91,11 +101,12 @@ def _prefix_len_from_threshold(t: float) -> int:
 
 @dataclass
 class Record:
-    record_id: str            # unique per-job id: f"{source_name}::{source_id}"
+    record_id: str            # unique per-job id: _make_record_id(source_name, source_id) using "|" (escaped)
     source_name: str
     source_id: str
     raw20: List[Any]          # len 20: f01..f20
     norm_selected: List[str]  # len = selected_fields
+
 
 
 def _init_globals(records: List[Record], cfg: Dict[str, Any]) -> None:
@@ -516,11 +527,12 @@ def _build_records(raw_rows: List[Tuple], cfg: Dict[str, Any]) -> List[Record]:
     for row in raw_rows:
         source_id = str(row[0])
         source_name = str(row[1])
-        record_id = f"{source_name}::{source_id}"
+        record_id = _make_record_id(source_name, source_id)
         raw20 = list(row[2:22])  # f01..f20
         norm_selected = [_norm(raw20[i]) for i in sel_idx]
         records.append(Record(record_id, source_name, source_id, raw20, norm_selected))
     return records
+
 
 
 
@@ -873,9 +885,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
     pairs_scored = 0
     matches_found = 0
 
-    exc_topk = int(os.environ.get("MATCH_EXCEPTION_TOPK", "5"))
+    exc_topk = int(os.environ.get("MATCH_EXCEPTION_TOPK", "20"))
     possible_cands: Dict[int, Dict[int, float]] = {}
-
 
     _init_globals(records, cfg)
 
@@ -926,6 +937,7 @@ with ProcessPoolExecutor(max_workers=match_workers, mp_context=ctx) as ex:
 cluster_ids = _assign_stable_cluster_ids(records, clusters, existing_map)
 
     # write match_exception (possible matches across clusters)
+    # write match_exception (possible matches across clusters)
     with get_conn() as conn:
         conn.execute("DELETE FROM match_exception WHERE job_id=?", (job_id,))
 
@@ -935,18 +947,17 @@ cluster_ids = _assign_stable_cluster_ids(records, clusters, existing_map)
             for idx in members:
                 idx_to_root[idx] = root
 
-        # dedupe: best score per (record_id, candidate_cluster_id)
-        best: Dict[Tuple[str, str], Tuple[float, str]] = {}
+        # dedupe: best score per (record_idx, candidate_cluster_id)
+        best: Dict[Tuple[int, str], Tuple[float, str]] = {}
         for i, cmap in possible_cands.items():
             root_i = idx_to_root[i]
             cluster_i = cluster_ids[root_i]
-            rec_i = records[i]
             for j, score in cmap.items():
                 root_j = idx_to_root[j]
                 cluster_j = cluster_ids[root_j]
                 if cluster_j == cluster_i:
                     continue
-                key = (rec_i.record_id, cluster_j)
+                key = (i, cluster_j)
                 prev = best.get(key)
                 cand_rec_id = records[j].record_id
                 if prev is None or score > prev[0]:
@@ -955,20 +966,15 @@ cluster_ids = _assign_stable_cluster_ids(records, clusters, existing_map)
         if best:
             now = _utc_now_iso()
             rows = []
-            for (record_id, cand_cluster_id), (score, cand_rec_id) in best.items():
-                # record_id is unique per job: source_name::source_id
-                if "::" in record_id:
-                    source_name, source_id = record_id.split("::", 1)
-                else:
-                    source_name, source_id = "", record_id
-
+            for (i, cand_cluster_id), (score, cand_rec_id) in best.items():
+                rec = records[i]
                 rows.append(
                     (
                         job_id,
                         model_id,
-                        record_id,
-                        source_name,
-                        source_id,
+                        rec.record_id,
+                        rec.source_name,
+                        rec.source_id,
                         cand_cluster_id,
                         cand_rec_id,
                         float(score),
@@ -995,6 +1001,7 @@ cluster_ids = _assign_stable_cluster_ids(records, clusters, existing_map)
                     """,
                     rows,
                 )
+
 
 
     # write recon_cluster + cluster_map

@@ -23,10 +23,11 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=http://127.0.0.1:5000
+      - VITE_API_URL=
     depends_on:
       - api
     command: ["npm","run","dev","--","--host","0.0.0.0","--port","5173"]
+
 
   db_init:
     build: ./backend

@@ -212,13 +212,16 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
             </div>
           </div>
 
-          <div className="mdmTable" style={{ overflowX: "auto", position: "relative" }}>
+          <div className="mdmTable" style={{ overflowX: jsonOpenId ? "hidden" : "auto", position: "relative" }}>
+
             <div
               className="mdmTHead"
               style={{
                 gridTemplateColumns: COLS,
                 background: HEAD_BG,
                 borderBottom: "1px solid var(--border, rgba(0,0,0,0.10))",
+                alignItems: "stretch",
+                justifyItems: "stretch",
               }}
             >
 
@@ -256,11 +259,20 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                   borderLeft: "1px solid var(--border, rgba(0,0,0,0.12))",
                   borderBottom: "1px solid var(--border, rgba(0,0,0,0.10))",
                   padding: "6px 8px",
+                  width: "100%",
+                  height: "100%",
+                  boxSizing: "border-box",
+                  alignSelf: "stretch",
+                  justifySelf: "stretch",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
               >
                 Actions
               </div>
             </div>
+
             
 
             <div className="mdmTableBody" style={{ overflow: "visible" }}>
@@ -366,6 +378,8 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                                 overflowX: "hidden",
                                 whiteSpace: "pre-wrap",
                                 overflowWrap: "anywhere",
+                                maxWidth: "100%",
+                                boxSizing: "border-box",
                               }}
                             >
                               {safeJson(m)}

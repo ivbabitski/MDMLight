@@ -17,8 +17,15 @@ const API_BASE = (() => {
     (typeof window !== "undefined" && window.__MDM_API_BASE__) ? String(window.__MDM_API_BASE__) : "";
   const env = (import.meta.env.VITE_API_URL || "").trim();
   const raw = String(win || env || "").trim();
-  return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+
+  if (raw) return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+
+  if (typeof window === "undefined") return "";
+  const proto = window.location.protocol || "http:";
+  const host = window.location.hostname || "localhost";
+  return `${proto}//${host}:5000`;
 })();
+
 
 const SOURCE_INPUT_FIELD_KEYS = Array.from({ length: 20 }, (_, i) => `f${String(i + 1).padStart(2, "0")}`);
 
@@ -165,7 +172,7 @@ export default function MdmPage() {
   const [currentUserId, setCurrentUserId] = useState("");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const accountMenuRef = useRef(null);
-
+  const prevSelectedModelIdRef = useRef("");
 
   const [modelsOpen, setModelsOpen] = useState(false);
 
@@ -396,8 +403,12 @@ export default function MdmPage() {
 
   function openWizard() {
     try {
+      const prev = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+      prevSelectedModelIdRef.current = prev;
       localStorage.removeItem(LS_SELECTED_MODEL_ID);
-    } catch {}
+    } catch {
+      prevSelectedModelIdRef.current = "";
+    }
     setWizardOpen(true);
   }
 
@@ -413,12 +424,19 @@ export default function MdmPage() {
 
   function closeWizard() {
     setWizardOpen(false);
+
     try {
-      localStorage.removeItem(LS_SELECTED_MODEL_ID);
+      const current = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+      if (!current) {
+        const prev = String(prevSelectedModelIdRef.current || "").trim();
+        if (prev) localStorage.setItem(LS_SELECTED_MODEL_ID, prev);
+      }
+      prevSelectedModelIdRef.current = "";
     } catch {}
 
     refreshSourceSummary();
   }
+
 
 
 
