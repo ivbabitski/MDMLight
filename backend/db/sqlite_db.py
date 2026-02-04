@@ -14,6 +14,26 @@ def get_conn() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+
+    def _norm_sql(s: object) -> str:
+        if s is None:
+            return ""
+        v = str(s).strip().lower()
+
+        # Strip punctuation by converting non-alnum chars to spaces,
+        # then collapse whitespace.
+        cleaned = []
+        for ch in v:
+            if ch.isalnum() or ch.isspace():
+                cleaned.append(ch)
+            else:
+                cleaned.append(" ")
+        v = "".join(cleaned)
+        v = " ".join(v.split())
+        return v
+
+    conn.create_function("norm", 1, _norm_sql)
+
     try:
         yield conn
         conn.commit()
@@ -22,6 +42,7 @@ def get_conn() -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+
 
 def _ensure_app_user_id(conn: sqlite3.Connection, table_name: str) -> None:
     """
@@ -84,60 +105,25 @@ def update_user_password(username: str, password_hash: str) -> bool:
         return cur.rowcount > 0
 
 
-def init_mdm_models() -> None:
-    with get_conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS mdm_models (
-                id TEXT PRIMARY KEY,
-                model_key TEXT NOT NULL UNIQUE,
-                model_name TEXT NOT NULL,
-                config_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                updated_at TEXT,
-                updated_by TEXT,
-                deleted_at TEXT,
-                deleted_by TEXT,
-                app_user_id INTEGER REFERENCES users(id)
-            )
-            """
-        )
-        _ensure_app_user_id(conn, "mdm_models")
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mdm_models_deleted_at ON mdm_models(deleted_at)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mdm_models_created_at ON mdm_models(created_at)"
-        )
-
-
-def create_mdm_model(model_key: str, model_name: str, config_json: str, actor: str, now: str) -> str:
+def list_mdm_models(include_deleted: bool = False):
     init_mdm_models()
-    import uuid
-
-    model_id = str(uuid.uuid4())
+    where = "" if include_deleted else "WHERE deleted_at IS NULL"
     with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO mdm_models (
+        cur = conn.execute(
+            f"""
+            SELECT
                 id, model_key, model_name, config_json,
+                owner_user_id, owner_username,
+                app_user_id,
                 created_at, created_by,
                 updated_at, updated_by,
-                deleted_at, deleted_by,
-                app_user_id
-            ) VALUES (
-                ?, ?, ?, ?,
-                ?, ?,
-                NULL, NULL,
-                NULL, NULL,
-                ?
-            )
-            """,
-            (model_id, model_key, model_name, config_json, now, actor),
+                deleted_at, deleted_by
+            FROM mdm_models
+            {where}
+            ORDER BY created_at DESC
+            """
         )
-    return model_id
+        return cur.fetchall()
 
 
 def list_mdm_models(include_deleted: bool = False):
@@ -221,23 +207,6 @@ def update_mdm_model(model_id: str, model_name, config_json, actor: str, now: st
         return cur.rowcount > 0
 
 
-def soft_delete_mdm_model(model_id: str, actor: str, now: str) -> bool:
-    init_mdm_models()
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            UPDATE mdm_models
-            SET
-                deleted_at = ?,
-                deleted_by = ?,
-                updated_at = ?,
-                updated_by = ?
-            WHERE id = ?
-              AND deleted_at IS NULL
-            """,
-            (now, actor, now, actor, model_id),
-        )
-        return cur.rowcount > 0
 def init_mdm_models() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -264,19 +233,16 @@ def init_mdm_models() -> None:
         )
         _ensure_app_user_id(conn, "mdm_models")
 
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mdm_models_owner_user_id ON mdm_models(owner_user_id)"
-        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mdm_models_model_name ON mdm_models(model_name)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mdm_models_model_key ON mdm_models(model_key)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mdm_models_deleted_at ON mdm_models(deleted_at)"
         )
 
-        # Uniqueness among ACTIVE models (soft delete still allows re-create).
-        # If partial indexes aren't supported, app still works — you just won't get uniqueness enforcement.
         try:
             conn.execute(
                 """
@@ -310,6 +276,19 @@ def create_mdm_model(
     model_id = str(uuid.uuid4())
 
     with get_conn() as conn:
+        cur = conn.execute(
+            """
+            SELECT 1
+            FROM mdm_models
+            WHERE deleted_at IS NULL
+              AND (model_key = ? OR model_name = ?)
+            LIMIT 1
+            """,
+            (model_key, model_name),
+        )
+        if cur.fetchone():
+            raise sqlite3.IntegrityError("active model_key or model_name already exists")
+
         conn.execute(
             """
             INSERT INTO mdm_models (
@@ -401,6 +380,7 @@ def soft_delete_mdm_model(model_id: str, actor: str, now: str) -> bool:
             (now, actor, now, actor, model_id),
         )
         return cur.rowcount > 0
+
 def init_mdm_models() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -742,6 +722,7 @@ def init_recon_cluster() -> None:
               match_status TEXT NOT NULL DEFAULT 'match',
               exceptions_status TEXT,
               assign_to_cluster TEXT,
+              match_score REAL NOT NULL DEFAULT 0.0,
 
               PRIMARY KEY (cluster_id, model_id, source_name, source_id, app_user_id)
             )
@@ -751,6 +732,7 @@ def init_recon_cluster() -> None:
         _ensure_column(conn, "recon_cluster", "match_status", "match_status TEXT NOT NULL DEFAULT 'match'")
         _ensure_column(conn, "recon_cluster", "exceptions_status", "exceptions_status TEXT")
         _ensure_column(conn, "recon_cluster", "assign_to_cluster", "assign_to_cluster TEXT")
+        _ensure_column(conn, "recon_cluster", "match_score", "match_score REAL NOT NULL DEFAULT 0.0")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model_status ON recon_cluster(app_user_id, model_id, match_status)"
@@ -764,6 +746,7 @@ def init_recon_cluster() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_recon_cluster_cluster_id ON recon_cluster(cluster_id)"
         )
+
 
 
 

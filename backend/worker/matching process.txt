@@ -1,119 +1,265 @@
-1) Inputs
+Matching process requirements (full logic)
+0) Inputs
 
-source_input = new incoming records
+User scope: app_user_id
 
-recon_cluster = existing clustered records
+Model scope: model_id
 
-if empty → bootstrap it from source_input (each record starts as its own cluster)
+Model JSON (from match_job.model_json or mdm_models.config_json) contains:
 
-mdm_model (JSON) defines:
+matchFieldCodes (e.g., ["f01","f02","f03"])
 
-matchFieldCodes
+per-field:
 
-per-field weight + matchThreshold (field gate)
+weight (sum of weights across matchFieldCodes = 1.0)
 
-model matchThreshold + possibleThreshold
+matchThreshold (field-level gate)
 
-2) Candidate generation (blocking) — schema-agnostic, weight-driven
+model-level:
 
-Goal: get a small candidate set from recon_cluster for each source_input record before Levenshtein scoring.
+matchThreshold (strong match)
 
-Sort matchFieldCodes by weight desc
+possibleThreshold (possible match)
 
-Start with top 2 fields (expand to top 3–4 only if needed)
+Data tables:
 
-Build adaptive prefix block keys using normalized values (lowercase, trim, strip punctuation)
+source_input = incoming records for app_user_id
 
-Adaptive tightening (until candidate count ≤ target, e.g., 1000):
+recon_cluster = clustered history for (app_user_id, model_id)
 
-1 char(top1) + 1 char(top2)
+1) Core scoring rules
 
-if too many → 2 + 1
+1.1 Field-level similarity
 
-if too many → 2 + 2
+For any two values (a,b):
 
-if too many → 3 + 2
+compute sim = conservative_similarity(a,b) where:
 
-keep increasing prefix lengths until under target
+sim = 1 - lev(a,b) / min(len(a),len(b)) clamped to [0..1]
 
-Notes:
+Field passes if: sim >= field.matchThreshold
 
-If a field is missing/too short → skip it and use next weighted field
+1.2 Model-level score (weighted gated)
 
-Token-aware prefixes when possible (e.g., last token for last name)
+For each match field i:
 
-Needs precomputed/indexed block keys in recon_cluster for speed
+compute (pass_i, sim_i) via field-level rule
 
-IMPORTANT: candidates must come from non-exception members only (exceptions are never used for matching)
+if pass_i == True: contribution = sim_i * weight_i
 
-3) Scoring (Levenshtein model)
+if pass_i == False: contribution = 0
 
-For each candidate cluster:
+Total model score:
 
-For each field in matchFieldCodes:
+score = sum(contribution_i)
 
-compute sim = levenshtein_similarity(a, b) in 0..1
+Weight = 0 means field has no effect on the model score.
 
-field gate:
+1.3 Pair classification by score
 
-if sim < field.matchThreshold → contribution = 0
+If score >= model.matchThreshold → strong match
 
-else contribution = sim * weight
+Else if possibleThreshold <= score < matchThreshold → possible match
 
-total = Σ(contribution_i) (weights sum ~1.0)
+Else → no match
 
-Pick best candidate = max total.
+2) Candidate generation (blocking)
 
-4) Classification
+Goal: avoid O(N²) scans; restrict candidate comparisons.
 
-if total >= model.matchThreshold → match
+2.1 Blocking fields selection
 
-else if model.possibleThreshold <= total < model.matchThreshold → exception
+Use matchFieldCodes sorted by weight desc
 
-else → no match
+Use top 2 fields by default; if missing values, fall back to next weighted fields.
 
-5) Output actions (UPDATED)
+2.2 Adaptive prefix blocking
+
+Normalize values: lower, trim, strip punctuation, collapse whitespace.
+
+Build block keys using prefixes of the top weighted fields.
+
+Tighten progressively until candidate count ≤ target (e.g., 1000):
+
+1+1, then 2+1, then 2+2, then 3+2, then keep increasing.
+
+Candidate set is produced for each record using this adaptive logic.
+
+If no blockers available, fall back to a capped scan (limited size).
+
+3) Two operating modes
+Mode A: Initial run (bootstrap) — when recon_cluster is empty for (app_user_id, model_id)
+
+Objective: cluster the incoming batch against itself.
+
+A1) Build strong-match clusters (matchThreshold)
+
+For each record r in the batch:
+
+Generate candidate records from the batch using blocking.
+
+For each candidate c:
+
+compute model score(r,c)
+
+if score >= matchThreshold: create a strong match link between r and c.
+
+Build clusters as connected components of strong links (transitive closure).
+
+A2) Assign cluster_id to strong clusters
+
+Each strong cluster gets one cluster_id (UUID).
+
+All records in those clusters:
+
+cluster_id = cluster.cluster_id
+
+match_status = "match"
+
+A3) “Find home” for remaining records (possibleThreshold)
+
+For any record not in a strong cluster:
+
+Find its best possible cluster candidate using model score:
+
+consider possible links to any record already assigned to a cluster (or to any record; cluster-level pick resolves later)
+
+choose the candidate cluster with highest score
+
+tie-breaker: smallest cluster_id
+
+If best possible score ≥ possibleThreshold:
+
+assign cluster_id = best_candidate_cluster_id
+
+set match_status = "exception"
+
+write an exception row (record → candidate cluster + score)
+
+If no possible candidate exists:
+
+create a new single-record cluster:
+
+new cluster_id
+
+match_status = "no_match"
+
+A4) Write outputs
+
+Insert all records into recon_cluster with:
+
+cluster_id
+
+match_status in (match, exception, no_match)
+
+original fields source_name/source_id/f01..f20/audit
+
+Upsert cluster_map for (source_name, source_id) → cluster_id.
+
+Mode B: Incremental run — when recon_cluster already has rows
+
+Objective: assign new incoming records into existing clusters, or create new ones.
+
+B1) Identify new records
+
+Process only source_input rows that do not exist in recon_cluster for the same (app_user_id, model_id, source_name, source_id).
+
+B2) For each new record, find best home
+
+Generate candidate clusters from recon_cluster using blocking.
+
+Compute model score against candidates.
+
+Pick best candidate cluster:
+
+max score
+
+tie-breaker: smallest cluster_id
+
+B3) Assign + classify
+
+If best score ≥ matchThreshold:
+
+assign that cluster_id
+
+match_status = "match"
+
+Else if best score ≥ possibleThreshold:
+
+assign that cluster_id
+
+match_status = "exception"
+
+write exception row
+
+Else:
+
+create new cluster_id
+
+match_status = "no_match"
+
+B4) Persist
+
+Insert into recon_cluster
+
+Upsert cluster_map
+
+Insert exception rows when status = exception
+
+4) Tie-breaking
+
+When multiple candidate clusters have equal best score:
+
+choose the one with smallest cluster_id.
+
+5) Non-negotiable outputs
 
 Every record gets a cluster_id:
 
-match:
+either from a strong cluster, best possible home, or a new single-record cluster.
 
-assign cluster_id = best_candidate_cluster_id
+Every record has match_status:
 
-set match_status = match
-
-exception:
-
-assign cluster_id = best_candidate_cluster_id
-
-set match_status = exception
-
-also write to exceptions table/queue for review
-
-no match:
-
-create new cluster (single-record cluster)
-
-assign cluster_id = new_cluster_id
-
-set match_status = new/no_match
+match, exception, or no_match.
 
 
 
 
 
+##########  How the dynamic candidate selection works ##########
 
+Pick blocking fields dynamically: take match fields sorted by weight (highest weight first), and use the first ones that actually have values (it will consider more than 2 if earlier ones are blank). 
 
-######## Things to keep in mind #######
+worker
 
-conservative_match is field-level only: for each field it returns (pass/fail, similarity, distance) using your min(len) normalization. 
-
-levenshtein
-
-The gated model is record-level: it takes those per-field results and decides match / exception / no_match using the weights + model thresholds. 
+ 
 
 matching process
 
-Weight = 0 means that field must not affect the final model score (so it shouldn’t help you reach matchThreshold). 
+Start with short prefixes (e.g., first character of field1, plus first character of field2 if using two fields). 
+
+worker
+
+ 
+
+matching process
+
+Count candidates returned by that prefix block.
+
+If candidate count is ≤ target, stop and score those.
+
+If candidate count is > target, tighten the block by increasing prefix lengths in the spec pattern: 1+1 → 2+1 → 2+2 → 3+2 → 3+3 → … until it’s small enough (or until max prefix length is reached). 
+
+worker
+
+ 
+
+matching process
+
+If there are no usable blocking values, it falls back to a capped scan (limited to the target size). 
+
+worker
+
+ 
 
 matching process
