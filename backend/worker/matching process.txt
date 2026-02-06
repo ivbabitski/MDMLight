@@ -227,39 +227,120 @@ match, exception, or no_match.
 
 
 ##########  How the dynamic candidate selection works ##########
+Goal
 
-Pick blocking fields dynamically: take match fields sorted by weight (highest weight first), and use the first ones that actually have values (it will consider more than 2 if earlier ones are blank). 
-
-worker
-
- 
+For each incoming record, generate a candidate set from the matching scope that is big enough to not miss matches but small enough to score fast: 250–500 candidates whenever possible. (This replaces the old “target=1000” style logic.)
 
 matching process
 
-Start with short prefixes (e.g., first character of field1, plus first character of field2 if using two fields). 
+Inputs
 
-worker
-
- 
+Match fields: ordered list of matchFieldCodes + each field’s weight (ties keep the model order).
 
 matching process
 
-Count candidates returned by that prefix block.
+matching process
 
-If candidate count is ≤ target, stop and score those.
+Scope:
 
-If candidate count is > target, tighten the block by increasing prefix lengths in the spec pattern: 1+1 → 2+1 → 2+2 → 3+2 → 3+3 → … until it’s small enough (or until max prefix length is reached). 
-
-worker
-
- 
+Incremental mode: candidates come from recon_cluster for (app_user_id, model_id).
 
 matching process
 
-If there are no usable blocking values, it falls back to a capped scan (limited to the target size). 
+matching process
 
-worker
-
- 
+Bootstrap mode: candidates come from the incoming batch (same logic, different pool).
 
 matching process
+
+Candidate band: MIN=250, MAX=500 (locked).
+
+Max prefix length per field: bounded by the normalized value length and a system max (implementation detail).
+
+Normalization (must be identical everywhere)
+
+Before building prefixes, normalize all field values:
+
+lower, trim, strip punctuation, collapse whitespace.
+
+matching process
+
+Core rule: how prefixes are built (this is the part we’re “locking”)
+
+Maintain prefix_len[field] starting at 0 for all usable fields.
+
+Field selection order
+
+Always start with the highest weight field.
+
+If multiple fields have the same weight, resolve ties by model order.
+
+matching process
+
+“Proportional to weight” increment rule (deterministic)
+
+You add one character at a time. Each step you choose one field to increment by 1.
+
+To choose which field to increment next:
+
+For each usable field, compute its next-step priority as:
+priority = weight / (current_prefix_len + 1)
+
+Increment the field with the highest priority.
+
+Tie-breakers (in order):
+
+higher weight
+
+earlier in model order
+
+This guarantees:
+
+You start with the highest-weight field.
+
+You keep incrementing it first until it stops being “worth more” than starting/expanding the next field.
+
+Over time, fields get prefix growth in a way that’s proportional to weights (your 70/30 example naturally becomes ~2:1 early on).
+
+Block key definition
+
+At any step, your blocking filter is:
+
+An AND of all fields where prefix_len > 0:
+
+candidate_field_value starts with record_field_value_prefix
+
+Stop conditions (range 250–500)
+
+After each increment step, query the scope and observe candidate count N:
+
+If 250 ≤ N ≤ 500 → STOP and return these candidates.
+
+If N > 500 → continue tightening (another increment step).
+
+If N < 250 → you likely over-tightened; see “backoff/cap” rules below.
+
+Backoff + cap rules (prevents “too many → zero” failures)
+
+You must track:
+
+the last candidate set with N > 0
+
+the last candidate set with N > 500 (the last “too many” set)
+
+Rules:
+
+If a tighter step produces N = 0, you must revert to the last non-empty set (never return empty due to over-tightening).
+
+If you drop from >500 to <250 (overshoot), you should return a deterministic capped subset of 500 from the last “>500” set (this keeps you in the 250–500 band and avoids starving the scorer).
+
+If the scope genuinely has <250 total records, return all of them (can’t manufacture candidates).
+
+If all match fields are blank/unusable for this record, fall back to a capped scan of 500 from scope.
+
+matching process
+
+Determinism (so runs are stable)
+
+When you need to cap a too-large set to 500, the selection must be deterministic (same input → same 500).
+Example deterministic ordering (implementation detail): fixed sort by stable keys like (cluster_id, source_name, source_id).

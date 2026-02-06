@@ -1,0 +1,317 @@
+Survivorship requirements updated
+1) Survivorship is a separate service/job
+
+Survivorship is not part of the worker code path internally.
+
+Survivorship runs as an independent service/job that the worker calls.
+
+Survivorship never runs on its own. It is triggered only by the match worker.
+
+Survivorship is the last step of the match run.
+
+Synchronous completion rule
+
+The worker must wait for survivorship to finish successfully.
+
+The worker must not mark the match job “completed” until survivorship returns success.
+
+If survivorship fails, the match job is failed (not completed).
+
+2) Inputs passed from Worker → Survivorship
+
+When worker triggers survivorship, it passes ONLY:
+
+app_user_id
+
+the full MDM model config JSON (the model)
+
+job_id
+
+Nothing else (no cluster_ids, no record payloads).
+
+3) Data sources and scope inside the database
+
+Survivorship reads cluster membership from recon_cluster.
+
+Filtering scope
+
+Survivorship processes clusters found in recon_cluster using:
+
+app_user_id = <passed app_user_id>
+
+model_id = <from passed model config>
+
+Cluster discovery
+
+Because worker does not pass cluster IDs:
+
+survivorship discovers clusters by querying distinct cluster_id in recon_cluster for that (app_user_id, model_id) scope.
+
+(So survivorship is responsible for enumerating clusters from the table.)
+
+4) Golden Record output contract
+
+For every cluster_id found in the scope, survivorship creates/updates exactly one golden row:
+
+golden_record.master_id = recon_cluster.cluster_id
+
+There is exactly one golden row per cluster_id.
+
+Golden records can change between runs. That is normal.
+
+Required write fields in golden_record
+
+Survivorship must write/maintain at least:
+
+master_id (cluster_id)
+
+job_id (must be populated; use the job_id passed from worker)
+
+model_id (from model config)
+
+app_user_id (from worker)
+
+match_threshold (from model config)
+
+Winner metadata:
+
+representative_source_name = winner.source_name
+
+representative_source_id = winner.source_id
+
+Winner ID format (required):
+
+representative_record_id = app_user_id | model_id | source_name | source_id
+
+This is the stable composite identifier.
+
+Golden attribute values:
+
+Copy all attributes (f01..f20) from the single winner record.
+
+No mixing. No per-field composition. One winner supplies everything.
+
+Audit timestamps:
+
+golden_record.created_at = system time when golden row is first inserted.
+
+golden_record.updated_at = system time when golden row is updated on later runs.
+
+Audit actors:
+
+created_by and updated_by should be set by system logic (recommended: match job actor if available via job_id, otherwise “system/survivorship”).
+(This is implementation detail, but golden_record schema requires both created_by (NOT NULL) and updated_by (nullable).)
+
+5) Absolute rule: exceptions are never eligible
+
+This is non-negotiable:
+
+Survivorship must exclude any record where:
+
+recon_cluster.match_status = 'exception'
+
+Exception records:
+
+must never be selected as a winner
+
+must never influence ranking
+
+must never contribute values to golden_record
+
+Candidate set for a cluster:
+
+eligible = all recon_cluster rows for cluster_id where match_status != 'exception'
+
+You stated: “There will be no clusters with zero eligible records.” Survivorship may treat “zero eligible” as out-of-scope / invariant.
+
+6) Survivorship rule modes
+
+Survivorship supports two main flavors:
+
+Blanket rule (single primary rule used to rank the cluster)
+
+Per-field (multi-field) rule (rank cluster by multiple fields + values in priority order)
+
+Even in per-field mode, the output is still ONE winner record.
+
+7) Blanket survivorship rules
+
+Blanket rules are selected by model.globalRule.
+
+7.1 Time-based rules
+
+These rules rank records by a timestamp and pick the first after sorting:
+
+recency_updated_date = most recently updated
+
+recency_created_date = most recently created
+
+first_updated_date = first updated
+
+first_created_date = first created
+
+Important: updated_at NULL behavior
+
+When a rule uses updated_at:
+
+Records with updated_at = NULL are skipped for the updated_at comparison.
+
+If all eligible records have updated_at = NULL, the rule cannot decide by updated_at, so survivorship moves into fallback logic (below).
+
+(You explicitly said: “skip records with updated = null.”)
+
+7.2 System priority rule
+
+globalRule = "system"
+
+The model provides systemPriority as an ordered list of selected systems.
+
+Rules:
+
+A system’s priority is its index in the list:
+
+first in list = highest priority
+
+second in list = next priority
+
+etc.
+
+If a record’s source_name is not listed in systemPriority:
+
+survivorship does not rank it by system priority
+
+it is handled only via fallback logic
+
+Selection flow:
+
+If there are eligible records whose source_name is in systemPriority:
+
+choose from the best-ranked system
+
+if multiple candidates remain tied, resolve via fallback chain
+
+If no eligible records belong to any listed system:
+
+go straight to fallback chain across all eligible records
+
+7.3 Specific value priority rule (multi-field, ordered, duplicates allowed)
+
+globalRule = "specific_value_priority"
+
+Model provides specificValuePriority as an ordered list of rows:
+
+{ fieldCode, value }
+
+It can include:
+
+multiple fields
+
+repeated fields
+
+repeated values
+
+user-defined order (drag/drop)
+
+Exact matching only
+
+Values are matched exactly (no fuzzy logic).
+
+If the user mistypes a value, it simply won’t match anything.
+
+Field priority (first occurrence rule)
+
+Field priority is determined by first time a field appears in the list:
+
+Example order:
+
+(field1, v1), (field2, v2), (field1, v3), (field3, v4)
+
+Effective field priority:
+
+field1
+
+field2
+
+field3
+
+Value priority within a field
+
+For each field, the preferred values are collected in list order:
+
+Example:
+
+(field1, v1), (field1, v3)
+Preferred values for field1:
+
+[v1, v3] (v1 outranks v3)
+
+Missing preferences behavior
+
+If a preference row has missing fieldCode or missing value, ignore that row.
+
+If a record has the field value missing/null, it simply can’t match that preferred value and is ignored for that match check.
+
+How it selects ONE winner (step-by-step)
+
+Given eligible records for a cluster:
+
+Build fieldPriorityOrder using “first occurrence” of each field in specificValuePriority.
+
+For each field in fieldPriorityOrder:
+
+look at that field’s ordered preferred values
+
+find the highest-priority value that matches at least one candidate record
+
+if none match any value for this field → move to next field
+
+if matches exist:
+
+keep only records matching the best matching value
+
+if one record remains → that’s the winner
+
+if multiple remain → continue to next field as tie-break
+
+If still tied after all prioritized fields are exhausted:
+
+apply the global fallback chain.
+
+8) Global fallback chain (always the same)
+
+If the primary rule cannot produce a single winner cleanly, use this fallback order:
+
+Most recently updated
+
+compare only records with non-null updated_at
+
+if none have updated_at, skip this fallback step
+
+Most recently created
+
+created_at is used to rank remaining candidates
+
+Final deterministic tie-breaker
+
+use (source_name, source_id) as the final stable key
+(you confirmed: “use source name plus source ID”)
+
+This guarantees one deterministic winner.
+
+9) Survivorship_json and lineage expectations
+
+golden_record.survivorship_json must store enough info to explain the decision, at minimum:
+
+globalRule used
+
+systemPriority used (if applicable)
+
+specificValuePriority used (if applicable)
+
+explicit statement: “exception records excluded”
+
+which fallbacks were applied (if any)
+
+winner identifiers (source_name/source_id)
+
+golden_record.lineage_json may store membership info, but must not ever imply exceptions were eligible.

@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import traceback
 import uuid
 import sqlite3
 import multiprocessing as mp
@@ -8,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple, Optional
 
 from .levenshtein import weighted_gated_score
+
 
 from db.sqlite_db import get_conn, init_all_tables
 
@@ -24,8 +26,13 @@ MAX_BUCKET_SIZE = int(os.environ.get("MATCH_MAX_BUCKET_SIZE", "500"))
 MATCH_WORKERS_TOTAL = int(os.environ.get("MATCH_WORKERS", str(os.cpu_count() or 2)))
 
 # Candidate generation (blocking)
-MATCH_CANDIDATE_TARGET = int(os.environ.get("MATCH_CANDIDATE_TARGET", "1000"))
+CANDIDATE_MIN = 250
+CANDIDATE_MAX = 500
+
+# Backward-compatible env var (no longer used for candidate selection range).
+MATCH_CANDIDATE_TARGET = int(os.environ.get("MATCH_CANDIDATE_TARGET", "500"))
 MATCH_BLOCK_MAX_PREFIX_LEN = int(os.environ.get("MATCH_BLOCK_MAX_PREFIX_LEN", "10"))
+
 
 
 def _utc_now_iso() -> str:
@@ -126,37 +133,6 @@ def _set_job_status(job_id: str, status: str, message: Optional[str] = None, **m
         conn.execute(f"UPDATE match_job SET {', '.join(cols)} WHERE job_id=?", vals)
 
 
-# ----------------------------
-# DB helpers (job + model)
-# ----------------------------
-
-def _set_job_status(job_id: str, status: str, message: Optional[str] = None, **metrics) -> None:
-    now = _utc_now_iso()
-
-    # Use COALESCE so we don't overwrite started_at on metric updates
-    cols = ["status=?", "updated_at=?"]
-    vals: List[Any] = [status, now]
-
-    if message is not None:
-        cols.append("message=?")
-        vals.append(message)
-
-    for k, v in metrics.items():
-        cols.append(f"{k}=?")
-        vals.append(v)
-
-    if status == "running":
-        cols.append("started_at=COALESCE(started_at, ?)")
-        vals.append(now)
-    if status in ("completed", "failed"):
-        cols.append("finished_at=COALESCE(finished_at, ?)")
-        vals.append(now)
-
-    vals.append(job_id)
-
-    with get_conn() as conn:
-        conn.execute(f"UPDATE match_job SET {', '.join(cols)} WHERE job_id=?", vals)
-
 
 def _claim_queued_jobs(limit: int) -> List[Dict[str, Any]]:
     """
@@ -228,15 +204,75 @@ def _claim_queued_jobs(limit: int) -> List[Dict[str, Any]]:
     return picked
 
 
-def _load_model_config_from_mdm_models(model_id: str) -> Dict[str, Any]:
+def _load_model_name_from_mdm_models(model_id: str) -> str:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT config_json FROM mdm_models WHERE id=? AND deleted_at IS NULL LIMIT 1",
+            "SELECT model_name FROM mdm_models WHERE id=? AND deleted_at IS NULL LIMIT 1",
             (model_id,),
         ).fetchone()
         if not row:
             raise ValueError(f"mdm_models not found (or deleted): id={model_id}")
-        return json.loads(row["config_json"]) if row["config_json"] else {}
+        return str(row["model_name"])
+
+
+def _load_model_config_from_mdm_models(model_id: str) -> Dict[str, Any]:
+    """
+    Loads the model configuration JSON from mdm_models.
+
+    The worker expects to receive a model config in match_job.model_json.
+    If that snapshot is empty, we load the current model config from mdm_models.
+
+    NOTE: This function is intentionally strict: it only reads from known
+    JSON-bearing columns and raises a clear error if none are present.
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM mdm_models WHERE id=? AND deleted_at IS NULL LIMIT 1",
+            (model_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"mdm_models not found (or deleted): id={model_id}")
+
+        candidate_cols = (
+            "model_json",
+            "model_config_json",
+            "config_json",
+            "model_config",
+            "config",
+        )
+
+        for col in candidate_cols:
+            if col not in row.keys():
+                continue
+
+            raw = row[col]
+            if raw is None:
+                raise ValueError(f"mdm_models.{col} is NULL for id={model_id}")
+
+            if isinstance(raw, dict):
+                return raw
+
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="replace")
+
+            if isinstance(raw, str):
+                s = raw.strip()
+                if not s:
+                    raise ValueError(f"mdm_models.{col} is empty for id={model_id}")
+                try:
+                    parsed = json.loads(s)
+                except Exception as e:
+                    raise ValueError(f"mdm_models.{col} is not valid JSON for id={model_id}: {e}")
+                if not isinstance(parsed, dict):
+                    raise ValueError(f"mdm_models.{col} must be a JSON object for id={model_id}")
+                return parsed
+
+            raise ValueError(f"mdm_models.{col} has unsupported type {type(raw)} for id={model_id}")
+
+        raise ValueError(
+            "no model config column found in mdm_models for this worker; "
+            f"looked for {list(candidate_cols)}; available columns={list(row.keys())}"
+        )
 
 
 def _normalize_model_json(raw: Any) -> Dict[str, Any]:
@@ -371,6 +407,10 @@ def _build_cfg(model: Dict[str, Any]) -> Dict[str, Any]:
         weights.append(w)
         thresholds.append(_to_0_1(thresh_map.get(f, 0.0), 0.0))
 
+    total_w = float(sum(weights))
+    if total_w > 0.0:
+        weights = [float(w) / total_w for w in weights]
+
     # Blocking
     blocking = model.get("blocking", {}) or {}
     max_bucket = int(blocking.get("max_bucket_size", MAX_BUCKET_SIZE))
@@ -394,28 +434,6 @@ def _build_cfg(model: Dict[str, Any]) -> Dict[str, Any]:
         "blocking_fields": block_fields[:2],
         "blocking_passes": passes,
     }
-
-
-def _load_model_name_from_mdm_models(model_id: str) -> str:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT model_name FROM mdm_models WHERE id=? AND deleted_at IS NULL LIMIT 1",
-            (model_id,),
-        ).fetchone()
-        if not row:
-            raise ValueError(f"mdm_models not found (or deleted): id={model_id}")
-        return str(row["model_name"])
-
-
-def _load_model_name_from_mdm_models(model_id: str) -> str:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT model_name FROM mdm_models WHERE id=? AND deleted_at IS NULL LIMIT 1",
-            (model_id,),
-        ).fetchone()
-        if not row:
-            raise ValueError(f"mdm_models not found (or deleted): id={model_id}")
-        return str(row["model_name"])
 
 
 def _load_recon_cluster_rows(app_user_id: int, model_id: str) -> List[Tuple]:
@@ -481,10 +499,17 @@ def _candidate_query(
         where.append(f"substr(norm(coalesce({f2}, '')), 1, ?) = ?")
         params.extend([int(l2), str(p2)])
 
-    params.append(int(MATCH_CANDIDATE_TARGET) + 1)
+    params.append(int(CANDIDATE_MAX) + 1)
 
-    sql = f"SELECT {', '.join(cols)} FROM recon_cluster WHERE {' AND '.join(where)} LIMIT ?"
+    sql = (
+        f"SELECT {', '.join(cols)} "
+        f"FROM recon_cluster "
+        f"WHERE {' AND '.join(where)} "
+        f"ORDER BY cluster_id ASC, source_name ASC, source_id ASC "
+        f"LIMIT ?"
+    )
     return conn.execute(sql, tuple(params)).fetchall()
+
 
 
 def _candidate_scan(
@@ -500,9 +525,11 @@ def _candidate_scan(
       FROM recon_cluster
       WHERE app_user_id=?
         AND model_id=?
+      ORDER BY cluster_id ASC, source_name ASC, source_id ASC
       LIMIT ?
     """
     return conn.execute(sql, (app_user_id, model_id, int(limit))).fetchall()
+
 
 
 def _adaptive_candidates(
@@ -511,47 +538,79 @@ def _adaptive_candidates(
     model_id: str,
     cfg: Dict[str, Any],
     norm_by_field: Dict[str, str],
+    scope_total: Optional[int] = None,
 ) -> List[sqlite3.Row]:
+    # Candidate selection requirements:
+    # - Start with highest-weight field.
+    # - Increment prefixes proportionally to weights via priority = weight / (prefix_len + 1).
+    # - Stop once candidate count is in [CANDIDATE_MIN, CANDIDATE_MAX] when possible.
+    # - Never return empty due to over-tightening; back off to the last non-empty set.
     selected_fields: List[str] = list(cfg.get("selected_fields") or [])
     weights: List[float] = list(cfg.get("weights") or [])
+
+    if scope_total is not None and int(scope_total) <= int(CANDIDATE_MAX):
+        return _candidate_scan(conn, app_user_id, model_id, cfg, limit=CANDIDATE_MAX)
 
     pairs = list(zip(selected_fields, weights))
     pairs.sort(key=lambda x: float(x[1] or 0.0), reverse=True)
 
-    usable = [(f, norm_by_field.get(f, "")) for f, _ in pairs if norm_by_field.get(f, "")]
-    usable = usable[:4]
+    usable: List[Tuple[str, float, str]] = []
+    for f, w in pairs:
+        v = norm_by_field.get(f, "")
+        if not v:
+            continue
+        usable.append((f, float(w or 0.0), v))
+        if len(usable) >= 2:
+            break
 
     if not usable:
-        return _candidate_scan(conn, app_user_id, model_id, cfg, limit=MATCH_CANDIDATE_TARGET)
+        return _candidate_scan(conn, app_user_id, model_id, cfg, limit=CANDIDATE_MAX)
 
-    # Single blocker
-    if len(usable) == 1:
-        f1, v1 = usable[0]
-        max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
-        l1 = 1
-        while True:
-            rows = _candidate_query(conn, app_user_id, model_id, cfg, f1=f1, p1=v1[:l1], l1=l1)
-            if len(rows) <= MATCH_CANDIDATE_TARGET or l1 >= max1:
-                return rows[:MATCH_CANDIDATE_TARGET]
-            l1 += 1
+    f1, w1, v1 = usable[0]
+    max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
 
-    # Try a few 2-field combinations: (1,2) then (1,3) then (2,3)
-    combos: List[Tuple[int, int]] = [(0, 1)]
-    if len(usable) >= 3:
-        combos.append((0, 2))
-        combos.append((1, 2))
+    f2: Optional[str] = None
+    w2 = 0.0
+    v2 = ""
+    max2 = 0
 
-    for a, b in combos:
-        f1, v1 = usable[a]
-        f2, v2 = usable[b]
-
-        max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
+    if len(usable) >= 2:
+        f2, w2, v2 = usable[1]
         max2 = min(len(v2), int(MATCH_BLOCK_MAX_PREFIX_LEN))
 
-        l1 = 1
-        l2 = 1
+    l1 = 0
+    l2 = 0
 
-        while True:
+    last_non_empty: Optional[List[sqlite3.Row]] = None
+    last_over_max: Optional[List[sqlite3.Row]] = None
+
+    while True:
+        best_priority = -1.0
+        best_weight = -1.0
+        best_order = 10**9
+
+        if l1 < max1:
+            pri1 = float(w1) / float(l1 + 1)
+            best_priority = pri1
+            best_weight = float(w1)
+            best_order = 0
+
+        if f2 is not None and l2 < max2:
+            pri2 = float(w2) / float(l2 + 1)
+            if pri2 > best_priority or (pri2 == best_priority and (float(w2) > best_weight or (float(w2) == best_weight and 1 < best_order))):
+                best_priority = pri2
+                best_weight = float(w2)
+                best_order = 1
+
+        if best_order == 10**9:
+            break
+
+        if best_order == 0:
+            l1 += 1
+        else:
+            l2 += 1
+
+        if f2 is not None and l2 > 0:
             rows = _candidate_query(
                 conn,
                 app_user_id,
@@ -564,30 +623,38 @@ def _adaptive_candidates(
                 p2=v2[:l2],
                 l2=l2,
             )
+        else:
+            rows = _candidate_query(conn, app_user_id, model_id, cfg, f1=f1, p1=v1[:l1], l1=l1)
 
-            if len(rows) <= MATCH_CANDIDATE_TARGET:
-                return rows
+        if len(rows) == 0:
+            if last_non_empty is not None:
+                if len(last_non_empty) > int(CANDIDATE_MAX):
+                    return last_non_empty[: int(CANDIDATE_MAX)]
+                return last_non_empty
+            return []
 
-            if l1 >= max1 and l2 >= max2:
-                break
+        last_non_empty = rows
 
-            # tightening pattern: (1,1)->(2,1)->(2,2)->(3,2)->(3,3)->...
-            if l1 == l2:
-                if l1 < max1:
-                    l1 += 1
-                elif l2 < max2:
-                    l2 += 1
-                else:
-                    break
-            else:
-                if l2 < max2:
-                    l2 += 1
-                elif l1 < max1:
-                    l1 += 1
-                else:
-                    break
+        if len(rows) > int(CANDIDATE_MAX):
+            last_over_max = rows
+            continue
 
+        if len(rows) >= int(CANDIDATE_MIN):
+            return rows
+
+        if last_over_max is not None:
+            return last_over_max[: int(CANDIDATE_MAX)]
+
+        return rows
+
+    if last_over_max is not None:
+        return last_over_max[: int(CANDIDATE_MAX)]
+    if last_non_empty is not None:
+        if len(last_non_empty) > int(CANDIDATE_MAX):
+            return last_non_empty[: int(CANDIDATE_MAX)]
+        return last_non_empty
     return []
+
 
 
 class _UnionFind:
@@ -658,92 +725,130 @@ def _adaptive_candidates_batch(
     selected_fields: List[str] = list(cfg.get("selected_fields") or [])
     weights: List[float] = list(cfg.get("weights") or [])
 
+    total_other = max(0, len(norm_rows) - 1)
+    if total_other <= int(CANDIDATE_MAX):
+        return [i for i in range(len(norm_rows)) if i != record_idx]
+
     pairs = list(zip(selected_fields, weights))
     pairs.sort(key=lambda x: float(x[1] or 0.0), reverse=True)
 
     norm_by_field = norm_rows[record_idx]
 
-    usable = [(f, norm_by_field.get(f, "")) for f, _ in pairs if norm_by_field.get(f, "")]
-    usable = usable[:4]
+    usable: List[Tuple[str, float, str]] = []
+    for f, w in pairs:
+        v = norm_by_field.get(f, "")
+        if not v:
+            continue
+        usable.append((f, float(w or 0.0), v))
+        if len(usable) >= 2:
+            break
 
     if not usable:
-        out: List[int] = []
-        for i in range(len(norm_rows)):
-            if i == record_idx:
-                continue
-            out.append(i)
-            if len(out) >= MATCH_CANDIDATE_TARGET:
-                break
-        return out
+        out: List[int] = [i for i in range(len(norm_rows)) if i != record_idx]
+        return out[: int(CANDIDATE_MAX)]
 
     def _list_for(f: str, l: int, p: str) -> List[int]:
         by_len = prefix_index.get(f) or {}
         by_prefix = by_len.get(int(l)) or {}
         return list(by_prefix.get(str(p)) or [])
 
-    # Single blocker
-    if len(usable) == 1:
-        f1, v1 = usable[0]
-        max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
-        l1 = 1
-        while True:
-            rows = _list_for(f1, l1, v1[:l1])
-            if len(rows) <= MATCH_CANDIDATE_TARGET or l1 >= max1:
-                return rows[:MATCH_CANDIDATE_TARGET]
-            l1 += 1
+    f1, w1, v1 = usable[0]
+    max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
 
-    # Try a few 2-field combinations: (1,2) then (1,3) then (2,3)
-    combos: List[Tuple[int, int]] = [(0, 1)]
-    if len(usable) >= 3:
-        combos.append((0, 2))
-        combos.append((1, 2))
+    f2: Optional[str] = None
+    w2 = 0.0
+    v2 = ""
+    max2 = 0
 
-    for a, b in combos:
-        f1, v1 = usable[a]
-        f2, v2 = usable[b]
-
-        max1 = min(len(v1), int(MATCH_BLOCK_MAX_PREFIX_LEN))
+    if len(usable) >= 2:
+        f2, w2, v2 = usable[1]
         max2 = min(len(v2), int(MATCH_BLOCK_MAX_PREFIX_LEN))
 
-        l1 = 1
-        l2 = 1
+    l1 = 0
+    l2 = 0
 
-        while True:
+    last_non_empty: Optional[List[int]] = None
+    last_over_max: Optional[List[int]] = None
+
+    while True:
+        best_priority = -1.0
+        best_weight = -1.0
+        best_order = 10**9
+
+        if l1 < max1:
+            pri1 = float(w1) / float(l1 + 1)
+            best_priority = pri1
+            best_weight = float(w1)
+            best_order = 0
+
+        if f2 is not None and l2 < max2:
+            pri2 = float(w2) / float(l2 + 1)
+            if pri2 > best_priority or (pri2 == best_priority and (float(w2) > best_weight or (float(w2) == best_weight and 1 < best_order))):
+                best_priority = pri2
+                best_weight = float(w2)
+                best_order = 1
+
+        if best_order == 10**9:
+            break
+
+        if best_order == 0:
+            l1 += 1
+        else:
+            l2 += 1
+
+        if l1 <= 0:
+            cand: List[int] = []
+        elif f2 is not None and l2 > 0:
             l1_list = _list_for(f1, l1, v1[:l1])
             l2_list = _list_for(f2, l2, v2[:l2])
 
             if not l1_list or not l2_list:
-                rows: List[int] = []
+                cand = []
             elif len(l1_list) <= len(l2_list):
                 small = set(l1_list)
-                rows = [x for x in l2_list if x in small]
+                cand = [x for x in l2_list if x in small]
             else:
                 small = set(l2_list)
-                rows = [x for x in l1_list if x in small]
+                cand = [x for x in l1_list if x in small]
+        else:
+            cand = _list_for(f1, l1, v1[:l1])
 
-            if len(rows) <= MATCH_CANDIDATE_TARGET:
-                return rows
+        cand = [x for x in cand if x != record_idx]
+        cand.sort()
 
-            if l1 >= max1 and l2 >= max2:
-                break
+        if len(cand) > int(CANDIDATE_MAX) + 1:
+            cand = cand[: int(CANDIDATE_MAX) + 1]
 
-            # tightening pattern: (1,1)->(2,1)->(2,2)->(3,2)->(3,3)->...
-            if l1 == l2:
-                if l1 < max1:
-                    l1 += 1
-                elif l2 < max2:
-                    l2 += 1
-                else:
-                    break
-            else:
-                if l2 < max2:
-                    l2 += 1
-                elif l1 < max1:
-                    l1 += 1
-                else:
-                    break
+        if len(cand) == 0:
+            if last_non_empty is not None:
+                if len(last_non_empty) > int(CANDIDATE_MAX):
+                    return last_non_empty[: int(CANDIDATE_MAX)]
+                return last_non_empty
+            return []
 
+        last_non_empty = cand
+
+        if len(cand) > int(CANDIDATE_MAX):
+            last_over_max = cand
+            continue
+
+        if len(cand) >= int(CANDIDATE_MIN):
+            return cand
+
+        if last_over_max is not None:
+            return last_over_max[: int(CANDIDATE_MAX)]
+
+        return cand
+
+    if last_over_max is not None:
+        return last_over_max[: int(CANDIDATE_MAX)]
+    if last_non_empty is not None:
+        if len(last_non_empty) > int(CANDIDATE_MAX):
+            return last_non_empty[: int(CANDIDATE_MAX)]
+        return last_non_empty
     return []
+
+
 def _seed_recon_cluster_from_source_input(app_user_id: int, model_id: str, model_name: str) -> int:
     src_cols = (
         ["source_name", "source_id"]
@@ -1041,12 +1146,7 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                         best_source_name = str(src_rows[j]["source_name"])
                         best_source_id = str(src_rows[j]["source_id"])
 
-                if best_cluster_id and best_score >= float(cfg["model_T"]):
-                    assigned_cluster[i] = best_cluster_id
-                    match_statuses[i] = "match"
-                    match_scores[i] = float(best_score)
-                    match_count += 1
-                elif best_cluster_id and best_score >= float(cfg.get("possible_T", 0.0) or 0.0):
+                if best_cluster_id and best_score >= float(cfg.get("possible_T", 0.0) or 0.0):
                     assigned_cluster[i] = best_cluster_id
                     match_statuses[i] = "exception"
                     match_scores[i] = float(best_score)
@@ -1081,6 +1181,7 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                     match_statuses[i] = "no_match"
                     match_scores[i] = 0.0
                     new_cluster_count += 1
+
 
             # A4) Persist all records
             for i, r in enumerate(src_rows):
@@ -1131,6 +1232,13 @@ def run_one_job(job_id: str, match_workers: int) -> None:
             # Mode B: Incremental run — match only NEW source_input rows into existing clusters
             total_clusters = 0
 
+            recon_scope_total = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS n FROM recon_cluster WHERE app_user_id=? AND model_id=?",
+                    (app_user_id, model_id),
+                ).fetchone()["n"]
+            )
+
             for r in src_rows:
                 # normalized inputs for match fields
                 norm_by_field: Dict[str, str] = {}
@@ -1139,7 +1247,15 @@ def run_one_job(job_id: str, match_workers: int) -> None:
 
                 incoming_selected = [norm_by_field[f] for f in cfg["selected_fields"]]
 
-                cand_rows = _adaptive_candidates(conn, app_user_id, model_id, cfg, norm_by_field)
+                cand_rows = _adaptive_candidates(
+                    conn,
+                    app_user_id,
+                    model_id,
+                    cfg,
+                    norm_by_field,
+                    scope_total=recon_scope_total,
+                )
+
 
                 best_score = 0.0
                 best_cluster_id: Optional[str] = None
@@ -1292,7 +1408,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
         exceptions_json=json.dumps(
             {
                 "exception_count": exception_count,
-                "candidate_target": MATCH_CANDIDATE_TARGET,
+                "candidate_min": CANDIDATE_MIN,
+                "candidate_max": CANDIDATE_MAX,
                 "blocking_max_prefix_len": MATCH_BLOCK_MAX_PREFIX_LEN,
                 "blocking_fields_by_weight": cfg.get("blocking_fields") or [],
             }
@@ -1300,19 +1417,41 @@ def run_one_job(job_id: str, match_workers: int) -> None:
     )
 
 
-
 def _job_process_entry(job_id: str, match_workers: int) -> None:
+    print(f"[worker] job_start job_id={job_id} match_workers={match_workers}", flush=True)
+
     try:
         run_one_job(job_id, match_workers=match_workers)
     except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[worker] job_failed job_id={job_id} err={type(e).__name__}: {e}\n{tb}", flush=True)
         try:
-            _set_job_status(job_id, "failed", str(e))
+            _set_job_status(job_id, "failed", f"{type(e).__name__}: {e}")
         except Exception:
             pass
+        return
+
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT status, message FROM match_job WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row:
+            print(f"[worker] job_done job_id={job_id} status={row['status']} message={row['message']}", flush=True)
+        else:
+            print(f"[worker] job_done job_id={job_id} status=unknown message=job_row_missing", flush=True)
+    except Exception as e:
+        print(f"[worker] job_done_log_error job_id={job_id} err={type(e).__name__}: {e}", flush=True)
+
 
 
 def main() -> None:
-    print("Worker started")
+    print(
+        f"Worker started DB_PATH={os.environ.get('DB_PATH', '/data/app.db')} "
+        f"poll={POLL_SECONDS} job_workers={JOB_WORKERS} match_workers_total={MATCH_WORKERS_TOTAL}",
+        flush=True,
+    )
     init_all_tables()
 
     # split CPU budget across concurrent jobs
@@ -1335,6 +1474,10 @@ def main() -> None:
             claimed = _claim_queued_jobs(slots)
             for j in claimed:
                 jid = j["job_id"]
+                print(
+                    f"[worker] claimed job_id={jid} app_user_id={j['app_user_id']} model_id={j['model_id']}",
+                    flush=True,
+                )
                 p = ctx.Process(
                     target=_job_process_entry,
                     args=(jid, per_job_workers),
@@ -1342,6 +1485,7 @@ def main() -> None:
                 )
                 p.start()
                 active[jid] = p
+
 
         if not active:
             time.sleep(POLL_SECONDS)

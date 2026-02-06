@@ -694,61 +694,133 @@ def init_match_job() -> None:
         )
 
 
-
-def init_recon_cluster() -> None:
+def init_recon_cluster():
     with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='recon_cluster'"
+        )
+        exists = cur.fetchone() is not None
+
+        needs_rebuild = False
+        if exists:
+            schema_row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='recon_cluster'"
+            ).fetchone()
+            schema_sql = str(schema_row["sql"] or "") if schema_row else ""
+            if "REFERENCES app_user" in schema_sql:
+                needs_rebuild = True
+            else:
+                fks = conn.execute("PRAGMA foreign_key_list(recon_cluster)").fetchall()
+                for fk in fks:
+                    if fk["from"] == "app_user_id" and fk["table"] != "users":
+                        needs_rebuild = True
+                        break
+
+        if exists and needs_rebuild:
+            conn.execute("ALTER TABLE recon_cluster RENAME TO recon_cluster_old")
+            conn.execute("DROP INDEX IF EXISTS ix_recon_cluster_cluster_id")
+            conn.execute("DROP INDEX IF EXISTS ix_recon_cluster_user_model")
+            conn.execute("DROP INDEX IF EXISTS ix_recon_cluster_user_model_cluster")
+            conn.execute("DROP INDEX IF EXISTS ix_recon_cluster_user_model_status")
+            conn.execute("DROP INDEX IF EXISTS ux_recon_cluster_identity")
+
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS recon_cluster (
-              cluster_id TEXT NOT NULL,
-              model_id TEXT NOT NULL,
-              model_name TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS recon_cluster(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id TEXT NOT NULL,
+                model_id TEXT,
+                model_name TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_id TEXT NOT NULL,
 
-              source_name TEXT NOT NULL,
-              source_id TEXT NOT NULL,
+                f01 TEXT, f02 TEXT, f03 TEXT, f04 TEXT, f05 TEXT,
+                f06 TEXT, f07 TEXT, f08 TEXT, f09 TEXT, f10 TEXT,
+                f11 TEXT, f12 TEXT, f13 TEXT, f14 TEXT, f15 TEXT,
+                f16 TEXT, f17 TEXT, f18 TEXT, f19 TEXT, f20 TEXT,
 
-              app_user_id INTEGER NOT NULL REFERENCES users(id),
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                updated_at TEXT,
+                updated_by TEXT,
 
-              f01 TEXT, f02 TEXT, f03 TEXT, f04 TEXT, f05 TEXT,
-              f06 TEXT, f07 TEXT, f08 TEXT, f09 TEXT, f10 TEXT,
-              f11 TEXT, f12 TEXT, f13 TEXT, f14 TEXT, f15 TEXT,
-              f16 TEXT, f17 TEXT, f18 TEXT, f19 TEXT, f20 TEXT,
-
-              created_at TEXT NOT NULL,
-              created_by TEXT NOT NULL,
-              updated_at TEXT,
-              updated_by TEXT,
-
-              match_status TEXT NOT NULL DEFAULT 'match',
-              exceptions_status TEXT,
-              assign_to_cluster TEXT,
-              match_score REAL NOT NULL DEFAULT 0.0,
-
-              PRIMARY KEY (cluster_id, model_id, source_name, source_id, app_user_id)
+                match_status TEXT DEFAULT 'match',
+                match_score REAL,
+                app_user_id INTEGER REFERENCES users(id)
             )
             """
         )
 
-        _ensure_column(conn, "recon_cluster", "match_status", "match_status TEXT NOT NULL DEFAULT 'match'")
-        _ensure_column(conn, "recon_cluster", "exceptions_status", "exceptions_status TEXT")
-        _ensure_column(conn, "recon_cluster", "assign_to_cluster", "assign_to_cluster TEXT")
-        _ensure_column(conn, "recon_cluster", "match_score", "match_score REAL NOT NULL DEFAULT 0.0")
+        if exists and needs_rebuild:
+            conn.execute(
+                """
+                INSERT INTO recon_cluster (
+                    id,
+                    cluster_id,
+                    model_id,
+                    model_name,
+                    source_name,
+                    source_id,
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model_status ON recon_cluster(app_user_id, model_id, match_status)"
-        )
+                    f01, f02, f03, f04, f05,
+                    f06, f07, f08, f09, f10,
+                    f11, f12, f13, f14, f15,
+                    f16, f17, f18, f19, f20,
+
+                    created_at,
+                    created_by,
+                    updated_at,
+                    updated_by,
+
+                    match_status,
+                    match_score,
+                    app_user_id
+                )
+                SELECT
+                    id,
+                    cluster_id,
+                    model_id,
+                    model_name,
+                    source_name,
+                    source_id,
+
+                    f01, f02, f03, f04, f05,
+                    f06, f07, f08, f09, f10,
+                    f11, f12, f13, f14, f15,
+                    f16, f17, f18, f19, f20,
+
+                    created_at,
+                    created_by,
+                    updated_at,
+                    updated_by,
+
+                    match_status,
+                    match_score,
+                    app_user_id
+                FROM recon_cluster_old
+                """
+            )
+            conn.execute("DROP TABLE recon_cluster_old")
+        _ensure_column(conn, "recon_cluster", "model_name", "model_name TEXT")
+        _ensure_column(conn, "recon_cluster", "match_status", "match_status TEXT DEFAULT 'match'")
+        _ensure_column(conn, "recon_cluster", "match_score", "match_score REAL")
+        for i in range(1, 21):
+            c = f"f{str(i).zfill(2)}"
+            _ensure_column(conn, "recon_cluster", c, f"{c} TEXT")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_recon_cluster_cluster_id ON recon_cluster(cluster_id)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model ON recon_cluster(app_user_id, model_id)"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model_source ON recon_cluster(app_user_id, model_id, source_name, source_id)"
+            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model_cluster ON recon_cluster(app_user_id, model_id, cluster_id)"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_cluster_id ON recon_cluster(cluster_id)"
+            "CREATE INDEX IF NOT EXISTS ix_recon_cluster_user_model_status ON recon_cluster(app_user_id, model_id, match_status)"
         )
-
-
-
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_recon_cluster_identity ON recon_cluster(app_user_id, model_id, source_name, source_id)"
+        )
 
 
 

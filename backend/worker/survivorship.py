@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,23 +17,15 @@ def _norm_key(x: Any) -> str:
         return ""
     return str(x).strip().lower()
 
-def _esc_pipe(x: Any) -> str:
-    if x is None:
-        return ""
-    return str(x).replace("|", "||")
-
-def _make_record_id(app_user_id: int, model_id: str, source_name: Any, source_id: Any) -> str:
-    return f"{app_user_id}|{model_id}|{_esc_pipe(source_name)}|{_esc_pipe(source_id)}"
-
-
 
 def _esc_pipe(s: Any) -> str:
     # keep record_id unambiguous even if source_name/source_id contain "|"
     return str(s or "").replace("|", "||")
 
 
-def _make_record_id(source_name: Any, source_id: Any) -> str:
-    return f"{_esc_pipe(source_name)}|{_esc_pipe(source_id)}"
+def _make_record_id(app_user_id: int, model_id: str, source_name: Any, source_id: Any) -> str:
+    # required stable composite identifier
+    return f"{int(app_user_id)}|{_esc_pipe(model_id)}|{_esc_pipe(source_name)}|{_esc_pipe(source_id)}"
 
 
 def _parse_dt(x: Any) -> Optional[datetime]:
@@ -54,71 +45,17 @@ def _parse_dt(x: Any) -> Optional[datetime]:
         return None
 
 
-def _dt_key(dt: Optional[datetime], direction: str) -> float:
-    # smaller == better, missing always last
-    if dt is None:
-        return math.inf
-    ts = dt.timestamp()
-    return -ts if direction == "desc" else ts
-
-
-def _direction(x: Any, default: str = "desc") -> str:
-    s = _norm_key(x)
-    if s in ("asc", "ascending", "oldest", "oldest_wins"):
-        return "asc"
-    if s in ("desc", "descending", "newest", "newest_wins", "latest", "latest_wins"):
-        return "desc"
-    return default
-
-
-def _strategy(x: Any, default: str = "updated_date") -> str:
-    s = _norm_key(x)
-    mapping = {
-        "updated": "updated_date",
-        "updated_at": "updated_date",
-        "updated_date": "updated_date",
-        "recency_updated_date": "updated_date",
-
-        "created": "created_date",
-        "created_at": "created_date",
-        "created_date": "created_date",
-        "recency_created_date": "created_date",
-
-        "recency": "recency",
-        "last_activity": "recency",
-
-        "system": "system_priority",
-        "system_priority": "system_priority",
-
-        "created_user": "created_user_priority",
-        "created_by": "created_user_priority",
-        "created_user_priority": "created_user_priority",
-
-        "updated_user": "updated_user_priority",
-        "updated_by": "updated_user_priority",
-        "updated_user_priority": "updated_user_priority",
-
-        # ambiguous, default to updated-user priority
-        "user_priority": "updated_user_priority",
-    }
-    return mapping.get(s, default)
-
-
-def _priority_rank(value: Any, priority_list: Any) -> int:
-    # lower is better, missing/unknown => huge (last)
-    if not isinstance(priority_list, list) or len(priority_list) == 0:
-        return 10**9
-    pr = [_norm_key(v) for v in priority_list[:50]]
-    m = {v: i for i, v in enumerate(pr) if v}
-    v = _norm_key(value)
-    if not v:
-        return 10**9
-    return m.get(v, 10**9)
+def _val_norm(v: Any) -> str:
+    # "Exact" matching, but stable vs leading/trailing whitespace.
+    if v is None:
+        return ""
+    return str(v).strip()
 
 
 @dataclass
-class SourceRow:
-    record_id: str
+class ReconRow:
+    cluster_id: str
+    model_id: str
     source_name: str
     source_id: str
     fields20: List[Any]
@@ -128,284 +65,473 @@ class SourceRow:
     updated_by: Optional[str]
     created_dt: Optional[datetime]
     updated_dt: Optional[datetime]
-    completeness: int
 
 
-def _load_source_rows(app_user_id: int, model_id: str) -> Dict[str, SourceRow]:
-    """
-    source_input does NOT have a stable single-column id.
-    We generate stable record_id:
-      app_user_id | model_id | source_name | source_id   (pipe escaped)
-    """
-    cols = ["source_id", "source_name"] + [f"f{str(i).zfill(2)}" for i in range(1, 21)] + [
+def _load_match_job(job_id: str) -> Dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM match_job WHERE job_id=?", (job_id,)).fetchone()
+        if not row:
+            raise ValueError(f"match_job not found for job_id={job_id}")
+        return dict(row)
+
+
+def _resolve_model_id(job_id: str, model: Dict[str, Any]) -> str:
+    # Preferred: explicit model_id in payload/model snapshot. Fallback: match_job.model_id.
+    candidates = [
+        model.get("model_id"),
+        model.get("modelId"),
+        model.get("id"),
+        model.get("mdm_model_id"),
+    ]
+    for c in candidates:
+        v = str(c or "").strip()
+        if v:
+            return v
+
+    job = _load_match_job(job_id)
+    v = str(job.get("model_id") or "").strip()
+    if not v:
+        raise ValueError("model_id is required (missing in model payload and match_job)")
+    return v
+
+
+def _resolve_match_threshold(model: Dict[str, Any]) -> float:
+    # MDM model config uses matchThreshold; internal worker config sometimes uses model_threshold.
+    v = model.get("matchThreshold")
+    if v is None:
+        v = model.get("model_threshold")
+    try:
+        return float(v or 0.85)
+    except Exception:
+        return 0.85
+
+
+def _normalize_global_rule(x: Any) -> str:
+    s = _norm_key(x)
+    if s in ("recency_updated_date", "updated_date", "updated", "updated_at"):
+        return "recency_updated_date"
+    if s in ("recency_created_date", "created_date", "created", "created_at"):
+        return "recency_created_date"
+    if s in ("first_updated_date", "first_updated", "oldest_updated", "asc_updated_date"):
+        return "first_updated_date"
+    if s in ("first_created_date", "first_created", "oldest_created", "asc_created_date"):
+        return "first_created_date"
+    if s in ("system", "system_priority"):
+        return "system"
+    if s in ("specific_value_priority", "specificvaluepriority", "specific_value"):
+        return "specific_value_priority"
+    # default
+    return "recency_updated_date"
+
+
+def _canonical_survivorship_cfg(model: Dict[str, Any]) -> Dict[str, Any]:
+    # Survivorship config is stored directly in the MDM model JSON.
+    global_rule = _normalize_global_rule(model.get("globalRule"))
+
+    system_priority = model.get("systemPriority")
+    if not isinstance(system_priority, list):
+        system_priority = []
+
+    svp = model.get("specificValuePriority")
+    if not isinstance(svp, list):
+        svp = []
+
+    return {
+        "globalRule": global_rule,
+        "systemPriority": system_priority,
+        "specificValuePriority": svp,
+    }
+
+
+def _discover_cluster_ids(conn, app_user_id: int, model_id: str) -> List[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT cluster_id
+        FROM recon_cluster
+        WHERE app_user_id=?
+          AND model_id=?
+          AND match_status != 'exception'
+        ORDER BY cluster_id
+        """,
+        (int(app_user_id), str(model_id)),
+    ).fetchall()
+    return [str(r["cluster_id"]) for r in rows]
+
+
+def _load_cluster_members(conn, app_user_id: int, model_id: str, cluster_id: str) -> List[ReconRow]:
+    cols = [
+        "cluster_id", "model_id", "source_name", "source_id",
+        *[f"f{str(i).zfill(2)}" for i in range(1, 21)],
         "created_at", "created_by", "updated_at", "updated_by"
     ]
 
-    sql = f"SELECT {', '.join(cols)} FROM source_input WHERE app_user_id=?"
+    sql = f"SELECT {', '.join(cols)} FROM recon_cluster WHERE app_user_id=? AND model_id=? AND cluster_id=? AND match_status != 'exception'"
 
-    out: Dict[str, SourceRow] = {}
-    with get_conn() as conn:
-        rows = conn.execute(sql, (app_user_id,)).fetchall()
+    rows = conn.execute(sql, (int(app_user_id), str(model_id), str(cluster_id))).fetchall()
 
+    out: List[ReconRow] = []
     for r in rows:
-        record_id = _make_record_id(app_user_id, model_id, r["source_name"], r["source_id"])
         f20 = [r[f"f{str(i).zfill(2)}"] for i in range(1, 21)]
         c_at = r["created_at"]
         u_at = r["updated_at"]
-
-        cdt = _parse_dt(c_at)
-        udt = _parse_dt(u_at)
-
-        completeness = sum(1 for v in f20 if v is not None and str(v).strip() != "")
-
-        out[record_id] = SourceRow(
-            record_id=record_id,
-            source_name=r["source_name"],
-            source_id=r["source_id"],
-            fields20=f20,
-            created_at=c_at,
-            created_by=r["created_by"],
-            updated_at=u_at,
-            updated_by=r["updated_by"],
-            created_dt=cdt,
-            updated_dt=udt,
-            completeness=completeness,
+        out.append(
+            ReconRow(
+                cluster_id=str(r["cluster_id"]),
+                model_id=str(r["model_id"]),
+                source_name=str(r["source_name"]),
+                source_id=str(r["source_id"]),
+                fields20=f20,
+                created_at=str(c_at),
+                created_by=str(r["created_by"]),
+                updated_at=str(u_at) if u_at is not None else None,
+                updated_by=str(r["updated_by"]) if r["updated_by"] is not None else None,
+                created_dt=_parse_dt(c_at),
+                updated_dt=_parse_dt(u_at),
+            )
         )
 
     return out
 
 
+def _final_tiebreaker(candidates: List[ReconRow]) -> ReconRow:
+    # Deterministic final tie-breaker: (source_name, source_id)
+    return sorted(candidates, key=lambda r: (_norm_key(r.source_name), _norm_key(r.source_id)))[0]
 
 
-def _load_job_model(job_id: str) -> Dict[str, Any]:
-    with get_conn() as conn:
-        row = conn.execute("SELECT model_json FROM match_job WHERE job_id=?", (job_id,)).fetchone()
-        if not row:
-            raise ValueError(f"match_job not found for job_id={job_id}")
-        return json.loads(row["model_json"]) if row["model_json"] else {}
+def _apply_fallback_chain(candidates: List[ReconRow], *, allow_updated: bool = True) -> Tuple[ReconRow, List[str]]:
+    steps: List[str] = []
+    remaining = list(candidates)
+
+    # 1) Most recently updated (skip NULL updated_at)
+    if allow_updated:
+        with_updated = [r for r in remaining if r.updated_dt is not None]
+        if with_updated:
+            best_dt = max(r.updated_dt for r in with_updated if r.updated_dt is not None)
+            remaining = [r for r in with_updated if r.updated_dt == best_dt]
+            steps.append("most_recently_updated")
+            if len(remaining) == 1:
+                return remaining[0], steps
+
+    # 2) Most recently created
+    with_created = [r for r in remaining if r.created_dt is not None]
+    if with_created:
+        best_cdt = max(r.created_dt for r in with_created if r.created_dt is not None)
+        remaining = [r for r in with_created if r.created_dt == best_cdt]
+    steps.append("most_recently_created")
+    if len(remaining) == 1:
+        return remaining[0], steps
+
+    # 3) Final deterministic source key tie-break
+    steps.append("source_name+source_id")
+    return _final_tiebreaker(remaining), steps
 
 
-def _load_clusters(job_id: str) -> Dict[str, List[str]]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT cluster_id, record_id FROM recon_cluster WHERE job_id=?",
-            (job_id,),
-        ).fetchall()
+def _pick_recency_updated(candidates: List[ReconRow]) -> Tuple[ReconRow, List[str]]:
+    # Primary: most recent updated_at (skip NULL updated_at)
+    with_updated = [r for r in candidates if r.updated_dt is not None]
+    if with_updated:
+        best_dt = max(r.updated_dt for r in with_updated if r.updated_dt is not None)
+        top = [r for r in with_updated if r.updated_dt == best_dt]
+        if len(top) == 1:
+            return top[0], []
+        # updated already used; go straight to created + id tie-break
+        return _apply_fallback_chain(top, allow_updated=False)
 
-    clusters: Dict[str, List[str]] = {}
-    for r in rows:
-        clusters.setdefault(r["cluster_id"], []).append(r["record_id"])
-    return clusters
+    # If all updated_at are NULL: fallback chain (updated step skipped automatically)
+    return _apply_fallback_chain(candidates, allow_updated=True)
 
 
-def _canonical_survivorship(model: Dict[str, Any]) -> Dict[str, Any]:
-    s = model.get("survivorship") or {}
-    if not isinstance(s, dict):
-        s = {}
+def _pick_recency_created(candidates: List[ReconRow]) -> Tuple[ReconRow, List[str]]:
+    # Primary: most recent created_at
+    with_created = [r for r in candidates if r.created_dt is not None]
+    if with_created:
+        best_cdt = max(r.created_dt for r in with_created if r.created_dt is not None)
+        top = [r for r in with_created if r.created_dt == best_cdt]
+        if len(top) == 1:
+            return top[0], []
+        return _apply_fallback_chain(top, allow_updated=True)
+    return _apply_fallback_chain(candidates, allow_updated=True)
 
-    mode = _norm_key(s.get("mode") or "simple")
-    if mode not in ("simple", "advanced"):
-        mode = "simple"
 
-    base = {
-        "mode": mode,
-        "strategy": _strategy(s.get("strategy"), default="updated_date"),
-        "direction": _direction(s.get("direction"), default="desc"),
-        "system_priority": s.get("system_priority", []),
-        "created_user_priority": s.get("created_user_priority", []),
-        "updated_user_priority": s.get("updated_user_priority", []),
-    }
+def _pick_first_updated(candidates: List[ReconRow]) -> Tuple[ReconRow, List[str]]:
+    # Primary: first updated_at (oldest). Skip NULL updated_at.
+    with_updated = [r for r in candidates if r.updated_dt is not None]
+    if with_updated:
+        best_dt = min(r.updated_dt for r in with_updated if r.updated_dt is not None)
+        top = [r for r in with_updated if r.updated_dt == best_dt]
+        if len(top) == 1:
+            return top[0], []
+        # updated already used; go straight to created + id tie-break
+        return _apply_fallback_chain(top, allow_updated=False)
+    return _apply_fallback_chain(candidates, allow_updated=True)
 
-    per_field = s.get("per_field") or s.get("field_strategies") or {}
-    if not isinstance(per_field, dict):
-        per_field = {}
 
-    pf_norm: Dict[str, Any] = {}
-    for k, v in per_field.items():
-        fk = _norm_key(k)
-        if not (len(fk) == 3 and fk.startswith("f") and fk[1:].isdigit()):
+def _pick_first_created(candidates: List[ReconRow]) -> Tuple[ReconRow, List[str]]:
+    # Primary: first created_at (oldest). created_at is NOT NULL in recon_cluster, but parse can fail.
+    with_created = [r for r in candidates if r.created_dt is not None]
+    if with_created:
+        best_cdt = min(r.created_dt for r in with_created if r.created_dt is not None)
+        top = [r for r in with_created if r.created_dt == best_cdt]
+        if len(top) == 1:
+            return top[0], []
+        return _apply_fallback_chain(top, allow_updated=True)
+    return _apply_fallback_chain(candidates, allow_updated=True)
+
+
+def _pick_system_priority(candidates: List[ReconRow], system_priority: List[Any]) -> Tuple[ReconRow, List[str]]:
+    # First system in the list is highest priority.
+    pr = [_norm_key(x) for x in (system_priority or []) if str(x or "").strip()]
+    if not pr:
+        return _apply_fallback_chain(candidates, allow_updated=True)
+
+    rank = {name: i for i, name in enumerate(pr)}
+
+    listed = [r for r in candidates if _norm_key(r.source_name) in rank]
+    if listed:
+        best_rank = min(rank[_norm_key(r.source_name)] for r in listed)
+        top = [r for r in listed if rank[_norm_key(r.source_name)] == best_rank]
+        if len(top) == 1:
+            return top[0], []
+        return _apply_fallback_chain(top, allow_updated=True)
+
+    # No listed systems present -> pure fallback chain across all candidates
+    return _apply_fallback_chain(candidates, allow_updated=True)
+
+
+def _get_field_value(r: ReconRow, field_code: str) -> Any:
+    fc = str(field_code or "").strip()
+    if not fc:
+        return None
+
+    nfc = _norm_key(fc)
+    if nfc in ("source_name", "source"):
+        return r.source_name
+    if nfc in ("source_id", "id"):
+        return r.source_id
+    if nfc == "created_by":
+        return r.created_by
+    if nfc == "updated_by":
+        return r.updated_by
+
+    # f01..f20
+    if len(nfc) == 3 and nfc.startswith("f") and nfc[1:].isdigit():
+        idx = int(nfc[1:]) - 1
+        if 0 <= idx < 20:
+            return r.fields20[idx]
+
+    return None
+
+
+def _canonical_specific_value_priority(raw: Any) -> Tuple[List[str], Dict[str, List[str]]]:
+    # raw: ordered list of {fieldCode, value} rows
+    field_order: List[str] = []
+    value_map: Dict[str, List[str]] = {}
+
+    if not isinstance(raw, list):
+        return field_order, value_map
+
+    for row in raw:
+        if not isinstance(row, dict):
             continue
-        if not isinstance(v, dict):
+        fc = row.get("fieldCode")
+        if fc is None:
+            fc = row.get("field")
+        if fc is None:
+            fc = row.get("code")
+        val = row.get("value")
+
+        fc_s = str(fc or "").strip()
+        val_s = _val_norm(val)
+        if not fc_s or not val_s:
+            # Ignore rows with missing fieldCode or missing value
             continue
-        pf_norm[fk] = {
-            "strategy": _strategy(v.get("strategy"), default=base["strategy"]),
-            "direction": _direction(v.get("direction"), default=base["direction"]),
-            "system_priority": v.get("system_priority", base["system_priority"]),
-            "created_user_priority": v.get("created_user_priority", base["created_user_priority"]),
-            "updated_user_priority": v.get("updated_user_priority", base["updated_user_priority"]),
-        }
 
-    base["per_field"] = pf_norm
-    return base
+        if fc_s not in value_map:
+            value_map[fc_s] = []
+            field_order.append(fc_s)
 
+        # Keep list order; duplicates don't add meaning
+        if val_s not in value_map[fc_s]:
+            value_map[fc_s].append(val_s)
 
-def _record_sort_key(
-    r: SourceRow,
-    strategy: str,
-    direction: str,
-    system_priority: Any,
-    created_user_priority: Any,
-    updated_user_priority: Any,
-    field_value: Optional[Any] = "__ignore_missing__",
-) -> Tuple:
-    # Missing value should go last ONLY when selecting per-field winners
-    if field_value == "__ignore_missing__":
-        missing_value_rank = 0
-    else:
-        missing_value_rank = 1 if (field_value is None or str(field_value).strip() == "") else 0
-
-    if strategy == "updated_date":
-        crit = _dt_key(r.updated_dt, direction)
-    elif strategy == "created_date":
-        crit = _dt_key(r.created_dt, direction)
-    elif strategy == "recency":
-        # last_activity = max(updated, created)
-        if r.updated_dt and r.created_dt:
-            dt = max(r.updated_dt, r.created_dt)
-        else:
-            dt = r.updated_dt or r.created_dt
-        crit = _dt_key(dt, direction)
-    elif strategy == "system_priority":
-        crit = _priority_rank(r.source_name, system_priority)
-    elif strategy == "created_user_priority":
-        crit = _priority_rank(r.created_by, created_user_priority)
-    elif strategy == "updated_user_priority":
-        crit = _priority_rank(r.updated_by, updated_user_priority)
-    else:
-        crit = 10**9
-
-    return (
-        missing_value_rank,
-        crit,
-        -r.completeness,
-        _norm_key(r.source_name),
-        _norm_key(r.source_id),
-        _norm_key(r.record_id),
-    )
+    return field_order, value_map
 
 
-def _pick_representative(members: List[SourceRow], cfg: Dict[str, Any]) -> SourceRow:
-    return sorted(
-        members,
-        key=lambda r: _record_sort_key(
-            r,
-            strategy=cfg["strategy"],
-            direction=cfg["direction"],
-            system_priority=cfg.get("system_priority"),
-            created_user_priority=cfg.get("created_user_priority"),
-            updated_user_priority=cfg.get("updated_user_priority"),
-            field_value="__ignore_missing__",
-        ),
-    )[0]
+def _pick_specific_value_priority(candidates: List[ReconRow], specific_value_priority: Any) -> Tuple[ReconRow, List[str]]:
+    field_order, value_map = _canonical_specific_value_priority(specific_value_priority)
+    if not field_order:
+        return _apply_fallback_chain(candidates, allow_updated=True)
+
+    remaining = list(candidates)
+
+    for fc in field_order:
+        prefs = value_map.get(fc) or []
+        if not prefs:
+            continue
+
+        # Find the highest priority value that matches at least one remaining record
+        best_match: Optional[str] = None
+        best_rows: List[ReconRow] = []
+
+        for pv in prefs:
+            pv_s = _val_norm(pv)
+            if not pv_s:
+                continue
+            hits = [r for r in remaining if _val_norm(_get_field_value(r, fc)) == pv_s]
+            if hits:
+                best_match = pv_s
+                best_rows = hits
+                break
+
+        if best_match is None:
+            # No preferred value matches for this field -> move to next field
+            continue
+
+        remaining = best_rows
+        if len(remaining) == 1:
+            return remaining[0], []
+
+    if len(remaining) == 1:
+        return remaining[0], []
+
+    return _apply_fallback_chain(remaining, allow_updated=True)
 
 
-def _pick_field_value(members: List[SourceRow], field_idx: int, field_cfg: Dict[str, Any]) -> Tuple[Any, str]:
-    best = sorted(
-        members,
-        key=lambda r: _record_sort_key(
-            r,
-            strategy=field_cfg["strategy"],
-            direction=field_cfg["direction"],
-            system_priority=field_cfg.get("system_priority"),
-            created_user_priority=field_cfg.get("created_user_priority"),
-            updated_user_priority=field_cfg.get("updated_user_priority"),
-            field_value=r.fields20[field_idx],
-        ),
-    )[0]
-    v = best.fields20[field_idx]
-    if v is None or str(v).strip() == "":
-        return None, best.record_id
-    return v, best.record_id
+def _pick_winner(candidates: List[ReconRow], surv_cfg: Dict[str, Any]) -> Tuple[ReconRow, List[str]]:
+    gr = surv_cfg.get("globalRule")
+    if gr == "recency_updated_date":
+        return _pick_recency_updated(candidates)
+    if gr == "recency_created_date":
+        return _pick_recency_created(candidates)
+    if gr == "first_updated_date":
+        return _pick_first_updated(candidates)
+    if gr == "first_created_date":
+        return _pick_first_created(candidates)
+    if gr == "system":
+        return _pick_system_priority(candidates, surv_cfg.get("systemPriority") or [])
+    if gr == "specific_value_priority":
+        return _pick_specific_value_priority(candidates, surv_cfg.get("specificValuePriority") or [])
+
+    # default
+    return _pick_recency_updated(candidates)
 
 
-def select_golden_records_for_job(
-    job_id: str,
-    model: Optional[Dict[str, Any]] = None,
-    app_user_id: Optional[int] = None,
-    model_id: Optional[str] = None,
-    actor: str = "worker",
-    mdm_source_name: str = "MDM",
-) -> Tuple[Dict[str, str], List[Tuple]]:
+def run_survivorship(job_id: str, app_user_id: int, model: Dict[str, Any], actor: str = "survivorship") -> Dict[str, Any]:
     """
-    Selection only (NO DB writes).
-    Returns:
-      - rep_by_cluster: {cluster_id: record_id}
-      - golden_upserts: tuples for worker to INSERT/UPSERT into golden_record
+    Independent survivorship job. Reads recon_cluster and writes golden_record.
+
+    Inputs (as required): job_id, app_user_id, model config JSON.
     """
-    if model is None:
-        model = _load_job_model(job_id)
+    if not str(job_id or "").strip():
+        raise ValueError("job_id is required")
 
-    if app_user_id is None or model_id is None:
-        raise ValueError("select_golden_records_for_job requires app_user_id and model_id")
+    if app_user_id is None:
+        raise ValueError("app_user_id is required")
 
-    match_threshold = float(model.get("model_threshold") or 0.85)
-    surv = _canonical_survivorship(model)
+    if not isinstance(model, dict):
+        raise ValueError("model config must be a dict")
 
-    source_rows = _load_source_rows(app_user_id=app_user_id, model_id=model_id)  # record_id -> SourceRow
-    clusters = _load_clusters(job_id)                                            # cluster_id -> [record_id...]
-
-    if not clusters:
-        return {}, []
+    model_id = _resolve_model_id(job_id, model)
+    match_threshold = _resolve_match_threshold(model)
+    surv_cfg = _canonical_survivorship_cfg(model)
 
     now = _utc_now_iso()
 
-    rep_by_cluster: Dict[str, str] = {}
-    golden_upserts: List[Tuple] = []
+    upserted = 0
+    processed = 0
 
-    for cluster_id, record_ids in clusters.items():
-        members = [source_rows[rid] for rid in record_ids if rid in source_rows]
-        if not members:
-            continue
+    cols = [
+        "master_id", "job_id", "model_id", "source_name", "match_threshold", "survivorship_json",
+        "representative_record_id", "representative_source_name", "representative_source_id", "lineage_json",
+        *[f"f{str(i).zfill(2)}" for i in range(1, 21)],
+        "created_at", "created_by", "updated_at", "updated_by", "app_user_id"
+    ]
 
-        rep = _pick_representative(members, surv)
-        rep_by_cluster[cluster_id] = rep.record_id
+    placeholders = ", ".join(["?"] * len(cols))
 
-        lineage_json = None
+    update_set = [
+        "job_id=excluded.job_id",
+        "model_id=excluded.model_id",
+        "source_name=excluded.source_name",
+        "match_threshold=excluded.match_threshold",
+        "survivorship_json=excluded.survivorship_json",
+        "representative_record_id=excluded.representative_record_id",
+        "representative_source_name=excluded.representative_source_name",
+        "representative_source_id=excluded.representative_source_id",
+        "lineage_json=excluded.lineage_json",
+    ]
+    for i in range(1, 21):
+        update_set.append(f"f{str(i).zfill(2)}=excluded.f{str(i).zfill(2)}")
+    update_set.extend([
+        "updated_at=excluded.updated_at",
+        "updated_by=excluded.updated_by",
+        "app_user_id=excluded.app_user_id",
+    ])
 
-        if surv["mode"] == "simple":
-            golden_fields = rep.fields20
-        else:
-            golden_fields = [None] * 20
-            lineage: Dict[str, Any] = {}
+    sql = f"""
+    INSERT INTO golden_record ({', '.join(cols)})
+    VALUES ({placeholders})
+    ON CONFLICT(master_id) DO UPDATE SET
+      {', '.join(update_set)}
+    """
 
-            for i in range(20):
-                fkey = f"f{str(i+1).zfill(2)}"
-                fcfg = surv["per_field"].get(fkey) or {
-                    "strategy": surv["strategy"],
-                    "direction": surv["direction"],
-                    "system_priority": surv.get("system_priority"),
-                    "created_user_priority": surv.get("created_user_priority"),
-                    "updated_user_priority": surv.get("updated_user_priority"),
-                }
+    with get_conn() as conn:
+        cluster_ids = _discover_cluster_ids(conn, app_user_id=app_user_id, model_id=model_id)
 
-                v, contrib_id = _pick_field_value(members, i, fcfg)
-                golden_fields[i] = v
-                lineage[fkey] = {"record_id": contrib_id, "strategy": fcfg["strategy"], "direction": fcfg["direction"]}
+        for cluster_id in cluster_ids:
+            members = _load_cluster_members(conn, app_user_id=app_user_id, model_id=model_id, cluster_id=cluster_id)
+            if not members:
+                continue
 
-            lineage_json = json.dumps(lineage)
+            processed += 1
 
-        survivorship_json = json.dumps(surv)
+            winner, fallbacks = _pick_winner(members, surv_cfg)
+            rep_record_id = _make_record_id(app_user_id, model_id, winner.source_name, winner.source_id)
 
-        golden_upserts.append(
-            (
-                cluster_id,  # master_id
-                job_id,
-                mdm_source_name,
-                match_threshold,
+            survivorship_json = json.dumps({
+                "globalRule": surv_cfg.get("globalRule"),
+                "systemPriority": surv_cfg.get("systemPriority") if surv_cfg.get("globalRule") == "system" else None,
+                "specificValuePriority": surv_cfg.get("specificValuePriority") if surv_cfg.get("globalRule") == "specific_value_priority" else None,
+                "exception_records_excluded": True,
+                "fallbacks_applied": fallbacks,
+                "winner": {"source_name": winner.source_name, "source_id": winner.source_id},
+            })
+
+            lineage_json = json.dumps({
+                "eligible_member_count": len(members),
+                "eligible_members": [{"source_name": m.source_name, "source_id": m.source_id} for m in members],
+                "winner": {"source_name": winner.source_name, "source_id": winner.source_id},
+                "exception_records_excluded": True,
+            })
+
+            values: List[Any] = [
+                str(cluster_id),               # master_id
+                str(job_id),                   # job_id
+                str(model_id),                 # model_id
+                "MDM",                        # source_name
+                float(match_threshold),        # match_threshold
                 survivorship_json,
-                rep.record_id,
-                rep.source_name,
-                rep.source_id,
+                rep_record_id,
+                winner.source_name,
+                winner.source_id,
                 lineage_json,
-                *golden_fields,
+                *winner.fields20,
                 now,
-                actor,
+                str(actor),
                 now,
-                actor,
-                app_user_id,
-                model_id,
-            )
-        )
+                str(actor),
+                int(app_user_id),
+            ]
 
-    return rep_by_cluster, golden_upserts
+            conn.execute(sql, tuple(values))
+            upserted += 1
 
+    return {
+        "ok": True,
+        "job_id": str(job_id),
+        "app_user_id": int(app_user_id),
+        "model_id": str(model_id),
+        "clusters_discovered": len(cluster_ids),
+        "clusters_processed": processed,
+        "golden_upserted": upserted,
+    }

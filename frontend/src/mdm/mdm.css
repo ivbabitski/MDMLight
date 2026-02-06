@@ -133,9 +133,10 @@
   border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
 }
+
 
 .mdmCard__title {
   font-weight: 900;
@@ -384,10 +385,77 @@
 
 .mdmBtnGroup { display: flex; gap: 8px; align-items: center; }
 
+.mdmRecordsHead{
+  justify-content: flex-start;
+  gap: 12px;
+}
+
+.mdmRecordsSearch{
+  flex: 1;
+  min-width: 260px;
+}
+
+.mdmRecordsActions{
+  margin-left: auto;
+}
+
+.mdmRecordsActions .mdmSeg{
+  padding: 3px;
+  border-radius: 14px;
+}
+
+.mdmRecordsActions .mdmSeg button{
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.mdmRecordsDownloadBtn{
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+}
+
+.mdmRecordsDownloadBtn svg{
+  display: block;
+}
+
+.mdmRecordsFooter{
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mdmRecordsFooterLeft,
+.mdmRecordsFooterMid,
+.mdmRecordsFooterRight{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mdmRecordsFooterMid{
+  justify-content: center;
+  flex: 1;
+}
+
+.mdmSelect--xs{
+  width: auto;
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
 .mdmInputWithIcon{
   position: relative;
   flex: 1;
 }
+
 
 
 .mdmInputIconBtn{
@@ -1152,11 +1220,18 @@
   color: rgba(20,83,45,1);
 }
 
+.mdmBtn--gold{
+  background: rgba(245,158,11,0.14);
+  border-color: rgba(245,158,11,0.24);
+  color: rgba(120,53,15,1);
+}
+
 .mdmBtn--danger{
   background: rgba(239,68,68,0.10);
   border-color: rgba(239,68,68,0.24);
   color: rgba(127,29,29,1);
 }
+
 
 
 .mdmPre{
@@ -1205,10 +1280,11 @@
   border-bottom: 1px solid var(--border);
   font-size: 12px;
   color: var(--muted);
-  text-align: left;
+  text-align: center;
   padding: 12px 12px;
   white-space: nowrap;
 }
+
 
 
 .mdmWideTable tbody td{
@@ -1241,8 +1317,9 @@
 }
 
 .mdmWideTable tbody tr:hover td.mdmWideStickyCol{
-  background: rgba(100,116,139,0.03);
+  background: #FAFBFC;
 }
+
 
 .mdmWideTable thead th.mdmWideStickyCol,
 .mdmWideTable tbody td.mdmWideStickyCol{
@@ -1254,7 +1331,9 @@
   display: flex;
   gap: 6px;
   align-items: center;
+  justify-content: center;
 }
+
 
 .mdmBtn.mdmIconBtn{
   width: 32px;

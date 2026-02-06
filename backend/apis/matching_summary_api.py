@@ -33,23 +33,14 @@ SURVIVORSHIP_LABELS = {
 }
 
 def _require_app_user_id():
-    v = (
-        request.headers.get("X-User-Id")
-        or request.headers.get("X-App-User-Id")
-        or request.args.get("app_user_id")
-        or ""
-    )
+    v = request.headers.get("X-User-Id") or ""
     v = str(v).strip()
     if not v:
-        dv = str(os.environ.get("DEFAULT_APP_USER_ID", "")).strip()
-        if dv:
-            v = dv
-        else:
-            return None, (jsonify({"error": "X-User-Id (app_user_id) is required"}), 400)
+        return None, (jsonify({"error": "X-User-Id is required"}), 400)
     try:
         return int(v), None
     except Exception:
-        return None, (jsonify({"error": "X-User-Id (app_user_id) must be an integer"}), 400)
+        return None, (jsonify({"error": "X-User-Id must be an integer"}), 400)
 
 def _rule_label(code: str) -> str:
     c = str(code or "").strip()
@@ -105,13 +96,14 @@ def matching_summary():
         # Load model config (and enforce ownership)
         row = conn.execute(
             """
-            SELECT id, config_json, owner_user_id, app_user_id
+            SELECT id, model_name, config_json, owner_user_id, app_user_id
             FROM mdm_models
             WHERE id = ?
             LIMIT 1
             """,
             (model_id,),
         ).fetchone()
+
 
         if not row:
             return jsonify({"error": "model not found"}), 404
@@ -124,6 +116,11 @@ def matching_summary():
             model_app_user_id = row["app_user_id"]
         except Exception:
             model_app_user_id = None
+        try:
+            model_name = str(row["model_name"] or "").strip()
+        except Exception:
+            model_name = ""
+
 
         if owner_id is not None and int(owner_id) != int(app_user_id):
             return jsonify({"error": "model does not belong to user"}), 403
@@ -295,6 +292,7 @@ def matching_summary():
         {
             "db_file": db_file,
             "model_id": model_id,
+            "model_name": model_name,
             "job": job,
             "golden_records": golden_records,
             "exceptions": exceptions,

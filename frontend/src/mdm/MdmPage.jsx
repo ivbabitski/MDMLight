@@ -155,7 +155,43 @@ async function fetchSourceInputSummary(appUserId, modelId) {
 }
 
 
+async function fetchMatchingSummary(appUserId, modelId) {
+  const base = String(API_BASE || "").trim();
+  const mid = String(modelId || "").trim();
+  const url = `${base}/api/matching/summary?model_id=${encodeURIComponent(mid)}&t=${Date.now()}`;
+
+  const userId = String(appUserId || "").trim();
+
+  const headers = {
+    Accept: "application/json",
+  };
+  if (userId) headers["X-User-Id"] = userId;
+
+  const res = await fetch(url, {
+    cache: "no-store",
+    headers,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`matching summary failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
+  }
+
+  const ct = String(res.headers.get("content-type") || "");
+  if (!ct.toLowerCase().includes("application/json")) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(
+      `matching summary expected JSON but got "${ct || "unknown"}". ` +
+        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
+    );
+  }
+
+  return res.json();
+}
+
+
 export default function MdmPage() {
+
 
 
   // Logo fallback
@@ -176,8 +212,13 @@ export default function MdmPage() {
 
   const [modelsOpen, setModelsOpen] = useState(false);
 
+  const [selectedModelId, setSelectedModelId] = useState("");
+
   const [sourceSummary, setSourceSummary] = useState(null);
   const [sourceSummaryErr, setSourceSummaryErr] = useState("");
+
+  const [matchingSummary, setMatchingSummary] = useState(null);
+  const [matchingSummaryErr, setMatchingSummaryErr] = useState("");
 
   const refreshSourceSummary = useCallback(async () => {
     const userId = String(currentUserId || "").trim();
@@ -198,6 +239,8 @@ export default function MdmPage() {
       return;
     }
 
+    setSelectedModelId(modelId);
+
     setSourceSummaryErr("");
     try {
       const data = await fetchSourceInputSummary(userId, modelId);
@@ -205,6 +248,37 @@ export default function MdmPage() {
     } catch (e) {
       setSourceSummary(null);
       setSourceSummaryErr(String(e?.message || e));
+    }
+  }, [currentUserId]);
+
+  const refreshMatchingSummary = useCallback(async () => {
+    const userId = String(currentUserId || "").trim();
+    if (!userId) {
+      setMatchingSummary(null);
+      setMatchingSummaryErr("");
+      return;
+    }
+
+    let modelId = "";
+    try {
+      modelId = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+    } catch {}
+
+    if (!modelId) {
+      setMatchingSummary(null);
+      setMatchingSummaryErr("model_id is required (select a model)");
+      return;
+    }
+
+    setSelectedModelId(modelId);
+
+    setMatchingSummaryErr("");
+    try {
+      const data = await fetchMatchingSummary(userId, modelId);
+      setMatchingSummary(data);
+    } catch (e) {
+      setMatchingSummary(null);
+      setMatchingSummaryErr(String(e?.message || e));
     }
   }, [currentUserId]);
 
@@ -251,6 +325,10 @@ export default function MdmPage() {
   }, [refreshSourceSummary]);
 
   useEffect(() => {
+    refreshMatchingSummary();
+  }, [refreshMatchingSummary]);
+
+  useEffect(() => {
     function onUpdated() {
       refreshSourceSummary();
     }
@@ -260,18 +338,31 @@ export default function MdmPage() {
     return () => window.removeEventListener("mdm:source_input_updated", onUpdated);
   }, [refreshSourceSummary]);
 
+  useEffect(() => {
+    function onSelectedModelChanged() {
+      refreshSourceSummary();
+      refreshMatchingSummary();
+    }
+
+    window.addEventListener("mdm:selected_model_changed", onSelectedModelChanged);
+
+    return () => window.removeEventListener("mdm:selected_model_changed", onSelectedModelChanged);
+  }, [refreshMatchingSummary, refreshSourceSummary]);
+
 
 
   // NEW (UI only): dashboard + records review
-  const [view, setView] = useState("golden"); // golden | exceptions
+  const [view, setView] = useState("golden"); // golden | match | exceptions
   const [q, setQ] = useState("");
+  const [masterIdFilter, setMasterIdFilter] = useState("");
+  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(0);
   const [modelOpen, setModelOpen] = useState(false);
 
   const [promoted, setPromoted] = useState({}); // uiKey -> boolean (exceptions view)
 
-
-
   const job = MOCK_JOB;
+
 
   const totalSourceRecords = useMemo(() => Number(sourceSummary?.total_records || 0), [sourceSummary]);
   const fieldsWithData = useMemo(() => Number(sourceSummary?.fields_with_data || 0), [sourceSummary]);
@@ -343,12 +434,25 @@ export default function MdmPage() {
   const exceptionRows = useMemo(() => rows.filter((r) => r.is_representative !== 1), [rows]);
 
   const listRows = useMemo(() => {
-    const base = view === "golden" ? goldenRows : exceptionRows;
     const query = q.trim().toLowerCase();
+    const master = masterIdFilter.trim().toLowerCase();
 
-    if (!query) return base;
+    let base = rows;
 
-    return base.filter((r) => {
+    if (view === "golden") {
+      base = goldenRows;
+    } else if (view === "exceptions") {
+      const exceptionClusterIds = new Set(exceptionRows.map((r) => r.cluster_id));
+      base = rows.filter((r) => exceptionClusterIds.has(r.cluster_id));
+    }
+
+    const narrowed = master
+      ? base.filter((r) => String(r.master_id || "").toLowerCase().includes(master))
+      : base;
+
+    if (!query) return narrowed;
+
+    return narrowed.filter((r) => {
       const hay = [
         r.matching_model,
         r.master_id,
@@ -363,7 +467,77 @@ export default function MdmPage() {
 
       return hay.includes(query);
     });
-  }, [exceptionRows, goldenRows, q, view]);
+  }, [exceptionRows, goldenRows, masterIdFilter, q, rows, view]);
+
+
+  useEffect(() => {
+    setPage(0);
+  }, [masterIdFilter, q, view, pageSize]);
+
+  const pageCount = useMemo(() => {
+    const total = listRows.length;
+    return total ? Math.ceil(total / pageSize) : 1;
+  }, [listRows.length, pageSize]);
+
+  useEffect(() => {
+    setPage((p) => Math.min(p, Math.max(0, pageCount - 1)));
+  }, [pageCount]);
+
+  const pagedRows = useMemo(() => {
+    const start = page * pageSize;
+    return listRows.slice(start, start + pageSize);
+  }, [listRows, page, pageSize]);
+
+  const pageStart = useMemo(() => {
+    if (listRows.length === 0) return 0;
+    return page * pageSize + 1;
+  }, [listRows.length, page, pageSize]);
+
+  const pageEnd = useMemo(() => {
+    if (listRows.length === 0) return 0;
+    return Math.min(listRows.length, (page + 1) * pageSize);
+  }, [listRows.length, page, pageSize]);
+
+
+  function csvEscapeCell(v) {
+    const s = String(v ?? "");
+    const needsQuotes = /[",\n\r]/.test(s);
+    const escaped = s.replace(/"/g, '""');
+    return needsQuotes ? `"${escaped}"` : escaped;
+  }
+
+  function downloadCsv() {
+    const cols = [
+      "matching_model",
+      "master_id",
+      "match_threshold",
+      "survivorship_strategy",
+      ...USER_FIELD_KEYS,
+      "created_at",
+      "created_by",
+      "updated_at",
+      "updated_by",
+    ];
+
+    const header = cols.join(",");
+    const lines = listRows.map((r) => cols.map((c) => csvEscapeCell(r[c])).join(","));
+    const csv = [header, ...lines].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    a.href = url;
+    a.download = `mdm_${view}_${ts}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+  }
+
+
 
   function togglePromote(row) {
     setPromoted((prev) => ({ ...prev, [row.uiKey]: !prev[row.uiKey] }));
@@ -375,6 +549,7 @@ export default function MdmPage() {
       source_id: row.source_id,
     });
   }
+
 
   function approveMatch(row) {
     console.log("[MDM ACTION] approve_match", {
@@ -437,10 +612,8 @@ export default function MdmPage() {
     } catch {}
 
     refreshSourceSummary();
+    refreshMatchingSummary();
   }
-
-
-
 
   function handleLogin({ user_id, username }) {
     const uid = String(user_id ?? "").trim();
@@ -738,37 +911,40 @@ export default function MdmPage() {
               <div className="mdmCard__head">
                 <div>
                   <div className="mdmCard__title">Matching & survivorship</div>
-                  <div className="mdmCard__sub">Golden, exceptions, clusters</div>
+                  <div className="mdmCard__sub">
+                    {matchingSummaryErr
+                      ? `Matching summary error: ${matchingSummaryErr}`
+                      : `Model: ${String(matchingSummary?.model_name || "—")} (id: ${String(selectedModelId || "—")})`}
+                  </div>
                 </div>
                 <button
                   className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
                   type="button"
-                  onClick={() => setModelOpen(true)}
-                  title="Matching model"
-                  aria-label="Matching model"
+                  onClick={refreshMatchingSummary}
+                  title="Refresh matching stats"
+                  aria-label="Refresh matching stats"
                 >
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <path d="M4 6h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M7 6v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M4 12h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M17 12v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                  </svg>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M3 12a9 9 0 0 1 15-6.7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  <path d="M3 4v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M21 12a9 9 0 0 1-15 6.7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  <path d="M21 20v-6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
                 </button>
               </div>
 
               <div className="mdmCard__body">
                 <div className="mdmKpiRow">
                   <div className="mdmKpi">
-                    <div className="mdmKpiNum">{fmtInt(goldenRows.length)}</div>
+                    <div className="mdmKpiNum">{fmtInt(Number(matchingSummary?.golden_records || 0))}</div>
                     <div className="mdmKpiLab">Golden records</div>
                   </div>
                   <div className="mdmKpi">
-                    <div className="mdmKpiNum">{fmtInt(exceptionRows.length)}</div>
+                    <div className="mdmKpiNum">{fmtInt(Number(matchingSummary?.exceptions || 0))}</div>
                     <div className="mdmKpiLab">Exceptions</div>
                   </div>
                   <div className="mdmKpi">
-                    <div className="mdmKpiNum">{fmtInt(totalClusters)}</div>
+                    <div className="mdmKpiNum">{fmtInt(Number(matchingSummary?.match_clusters || 0))}</div>
                     <div className="mdmKpiLab">Match clusters</div>
                   </div>
                 </div>
@@ -777,17 +953,20 @@ export default function MdmPage() {
 
                 <div className="mdmSectionTitle">Matching fields</div>
                 <div className="mdmPillRow">
-                  {matchKeys.map((k) => {
-                    const label = UI_FIELDS.find((f) => f.key === k)?.label || k;
-                    return <span className="mdmPillSoft" key={k}>{label}</span>;
-                  })}
+                  {Array.isArray(matchingSummary?.match_field_pills) && matchingSummary.match_field_pills.length ? (
+                    matchingSummary.match_field_pills.map((lbl) => (
+                      <span className="mdmPillSoft" key={String(lbl)}>{String(lbl)}</span>
+                    ))
+                  ) : (
+                    <span className="mdmPillSoft">—</span>
+                  )}
                 </div>
 
                 <div className="mdmDivider" />
 
                 <div className="mdmSectionTitle">Survivorship strategy</div>
                 <div className="mdmPillRow">
-                  <span className="mdmPillSoft mdmPillSoft--strong">{survivorshipStrategy}</span>
+                  <span className="mdmPillSoft mdmPillSoft--strong">{String(matchingSummary?.survivorship_label || "—")}</span>
                 </div>
 
               </div>
@@ -796,13 +975,35 @@ export default function MdmPage() {
 
           {/* NEW: Records table */}
           <div className="mdmCard">
-            <div className="mdmCard__head">
+            <div className="mdmCard__head mdmRecordsHead">
               <div>
                 <div className="mdmCard__title">Records</div>
-                <div className="mdmCard__sub">Golden + exceptions (table)</div>
+                <div className="mdmCard__sub">Golden / Match / Exceptions (table)</div>
               </div>
 
-              <div className="mdmBtnGroup">
+              <div className="mdmInputWithIcon mdmRecordsSearch">
+                <input
+                  className="mdmInput mdmInput--withIcon"
+                  type="text"
+                  value={masterIdFilter}
+                  onChange={(e) => setMasterIdFilter(e.target.value)}
+                  placeholder="Filter master_id"
+                  aria-label="Filter by master_id"
+                />
+                {masterIdFilter ? (
+                  <button
+                    type="button"
+                    className="mdmInputIconBtn"
+                    onClick={() => setMasterIdFilter("")}
+                    title="Clear master_id filter"
+                    aria-label="Clear master_id filter"
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="mdmBtnGroup mdmRecordsActions">
                 <div className="mdmSeg" role="tablist" aria-label="Records toggle">
                   <button
                     type="button"
@@ -815,6 +1016,15 @@ export default function MdmPage() {
                   </button>
                   <button
                     type="button"
+                    className={view === "match" ? "isActive" : ""}
+                    onClick={() => { setView("match"); setQ(""); }}
+                    role="tab"
+                    aria-selected={view === "match"}
+                  >
+                    Match
+                  </button>
+                  <button
+                    type="button"
                     className={view === "exceptions" ? "isActive" : ""}
                     onClick={() => { setView("exceptions"); setQ(""); }}
                     role="tab"
@@ -824,11 +1034,27 @@ export default function MdmPage() {
                   </button>
                 </div>
 
-                <span className="mdmTag mdmTag--soft">{fmtInt(listRows.length)} shown</span>
+                <button
+                  className="mdmBtn mdmBtn--xs mdmBtn--soft mdmRecordsDownloadBtn"
+                  type="button"
+                  onClick={downloadCsv}
+                  title="Download CSV"
+                  aria-label="Download CSV"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M12 3v10" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M8 11l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M4 17v4h16v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
               </div>
+
+
             </div>
 
+
             <div className="mdmCard__body">
+
               <div className="mdmWideTableWrap">
                 <table className={`mdmWideTable ${view === "exceptions" ? "isExceptions" : "isGolden"}`}>
 
@@ -851,11 +1077,12 @@ export default function MdmPage() {
                   </thead>
 
                   <tbody>
-                    {listRows.map((r) => {
+                    {pagedRows.map((r) => {
                       const isPromoted = !!promoted[r.uiKey];
 
                       return (
                         <tr key={r.uiKey}>
+
                           <td className="mdmMono">{r.matching_model}</td>
                           <td className="mdmMono">{r.master_id}</td>
                           <td className="mdmMono">{String(r.match_threshold)}</td>
@@ -874,7 +1101,7 @@ export default function MdmPage() {
                             {view === "exceptions" ? (
                               <div className="mdmRowActions mdmRowActions--right">
                                 <button
-                                  className={`mdmBtn mdmBtn--xs mdmIconBtn ${isPromoted ? "mdmBtn--soft" : "mdmBtn--primary"}`}
+                                  className={`mdmBtn mdmBtn--xs mdmIconBtn ${isPromoted ? "mdmBtn--soft" : "mdmBtn--gold"}`}
                                   type="button"
                                   onClick={() => togglePromote(r)}
                                   title={isPromoted ? "Unpromote" : "Promote to master"}
@@ -894,7 +1121,7 @@ export default function MdmPage() {
                                 </button>
 
                                 <button
-                                  className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
+                                  className="mdmBtn mdmBtn--xs mdmBtn--run mdmIconBtn"
                                   type="button"
                                   onClick={() => approveMatch(r)}
                                   title="Approve match"
@@ -904,6 +1131,7 @@ export default function MdmPage() {
                                     <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                                   </svg>
                                 </button>
+
 
                                 <button
                                   className="mdmBtn mdmBtn--xs mdmBtn--danger mdmIconBtn"
@@ -941,6 +1169,54 @@ export default function MdmPage() {
                   </tbody>
                 </table>
               </div>
+
+              <div className="mdmRecordsFooter" role="navigation" aria-label="Records pagination">
+                <div className="mdmRecordsFooterLeft">
+                  <span className="mdmTiny">Rows per page</span>
+                  <select
+                    className="mdmSelect mdmSelect--xs"
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    aria-label="Rows per page"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                  </select>
+                </div>
+
+                <div className="mdmRecordsFooterMid">
+                  <span className="mdmTiny">
+                    Showing {fmtInt(pageStart)}–{fmtInt(pageEnd)} of {fmtInt(listRows.length)}
+                  </span>
+                </div>
+
+                <div className="mdmRecordsFooterRight">
+                  <button
+                    className="mdmBtn mdmBtn--xs mdmBtn--soft"
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={page === 0}
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    ‹
+                  </button>
+
+                  <span className="mdmTag mdmTag--soft">{fmtInt(page + 1)} / {fmtInt(pageCount)}</span>
+
+                  <button
+                    className="mdmBtn mdmBtn--xs mdmBtn--soft"
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                    disabled={page >= pageCount - 1}
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    ›
+                  </button>
+                </div>
+              </div>
+
             </div>
           </div>
 

@@ -19,8 +19,9 @@ from db.sqlite_db import (
 bp = Blueprint("mdm_model_api", __name__)
 
 def _require_app_user_id():
-    v = request.headers.get("X-User-Id") or request.headers.get("X-App-User-Id") or request.args.get("app_user_id") or ""
+    v = request.headers.get("X-User-Id") or request.args.get("app_user_id") or ""
     v = str(v).strip()
+
     if not v:
         actor = (request.headers.get("X-Actor") or request.args.get("actor") or "").strip()
         if actor:
