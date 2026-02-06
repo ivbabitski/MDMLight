@@ -118,6 +118,20 @@ function safeJson(v) {
   }
 }
 
+function safeJsonFromStringMaybe(v) {
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return "";
+    try {
+      return JSON.stringify(JSON.parse(s), null, 2);
+    } catch {
+      return s;
+    }
+  }
+
+  return safeJson(v);
+}
+
 
 async function fetchSourceInputSummary(appUserId, modelId) {
   const base = String(API_BASE || "").trim();
@@ -281,7 +295,7 @@ async function cleanupReconCluster(appUserId, modelId) {
     method: "DELETE",
     cache: "no-store",
     headers,
-    body: JSON.stringify({ mdm_model_id: mid }),
+    body: JSON.stringify({ model_id: mid }),
   });
 
   if (!res.ok) {
@@ -319,7 +333,7 @@ async function cleanupGoldenRecord(appUserId, modelId) {
     method: "DELETE",
     cache: "no-store",
     headers,
-    body: JSON.stringify({ mdm_model_id: mid }),
+    body: JSON.stringify({ model_id: mid }),
   });
 
   if (!res.ok) {
@@ -338,6 +352,7 @@ async function cleanupGoldenRecord(appUserId, modelId) {
 
   return res.json();
 }
+
 
 
 export default function MdmPage() {
@@ -542,6 +557,10 @@ export default function MdmPage() {
   const [page, setPage] = useState(0);
   const [modelOpen, setModelOpen] = useState(false);
 
+  const [jsonPopupOpen, setJsonPopupOpen] = useState(false);
+  const [jsonPopupTitle, setJsonPopupTitle] = useState("");
+  const [jsonPopupPayload, setJsonPopupPayload] = useState(null);
+
   const [records, setRecords] = useState([]);
   const [recordsErr, setRecordsErr] = useState("");
   const [recordsBusy, setRecordsBusy] = useState(false);
@@ -685,6 +704,60 @@ export default function MdmPage() {
     return pills.map((x) => String(x || "").trim()).filter(Boolean);
   }, [sourceSummary]);
 
+  const sourceFieldLabelsAligned = useMemo(() => {
+    const pills = Array.isArray(sourceSummary?.field_pills) ? sourceSummary.field_pills : [];
+    return pills.map((x) => String(x || "").trim());
+  }, [sourceSummary]);
+
+  const userFieldLabelByKey = useMemo(() => {
+    const out = {};
+
+    const labelByDbKey = {};
+    const rawLabels = (
+      (matchingSummary && typeof matchingSummary === "object" && matchingSummary.field_level_labels) ||
+      (matchingSummary && typeof matchingSummary === "object" && matchingSummary.model_json && matchingSummary.model_json.field_level_labels) ||
+      null
+    );
+
+    if (rawLabels && typeof rawLabels === "object" && !Array.isArray(rawLabels)) {
+      for (const rawKey of Object.keys(rawLabels)) {
+        const key = String(rawKey || "").trim();
+        if (!key) continue;
+        const v = String(rawLabels[rawKey] || "").trim();
+        if (!v) continue;
+
+        const m = key.match(/^f(\d{1,2})$/i);
+        if (m) {
+          const dbKey = `f${String(m[1]).padStart(2, "0")}`;
+          labelByDbKey[dbKey] = v;
+        } else {
+          labelByDbKey[key] = v;
+        }
+      }
+    }
+
+    const labelByDbKeyFromSource = {};
+    if (Array.isArray(sourceFieldKeys) && Array.isArray(sourceFieldLabelsAligned)) {
+      const n = Math.min(sourceFieldKeys.length, sourceFieldLabelsAligned.length);
+      for (let i = 0; i < n; i += 1) {
+        const key = String(sourceFieldKeys[i] || "").trim();
+        const v = String(sourceFieldLabelsAligned[i] || "").trim();
+        if (!key || !v) continue;
+        labelByDbKeyFromSource[key] = v;
+      }
+    }
+
+    for (let i = 1; i <= 20; i += 1) {
+      const uiKey = `f${i}`;
+      const dbKey = `f${String(i).padStart(2, "0")}`;
+
+      const lbl = labelByDbKey[dbKey] || labelByDbKeyFromSource[dbKey] || "";
+      out[uiKey] = lbl || uiKey.toUpperCase();
+    }
+
+    return out;
+  }, [matchingSummary, sourceFieldKeys, sourceFieldLabelsAligned]);
+
 
   const matchingFields = useMemo(() => {
     const arr = Array.isArray(matchingSummary?.matching_fields) ? matchingSummary.matching_fields : [];
@@ -815,6 +888,13 @@ export default function MdmPage() {
   }
 
 
+  function openJsonPopup(title, payload) {
+    setJsonPopupTitle(String(title || "JSON"));
+    setJsonPopupPayload(payload);
+    setJsonPopupOpen(true);
+  }
+
+
 
   function togglePromote(row) {
     setPromoted((prev) => ({ ...prev, [row.uiKey]: !prev[row.uiKey] }));
@@ -873,13 +953,23 @@ export default function MdmPage() {
 
     setConfirmBusy(true);
     setConfirmErr("");
+    setCleanupNotice("");
 
     try {
-      if (kind === "recon") {
-        await cleanupReconCluster(userId, modelId);
-      } else {
-        await cleanupGoldenRecord(userId, modelId);
-      }
+      const table = kind === "recon" ? "recon_cluster" : "golden_record";
+
+      const result = kind === "recon"
+        ? await cleanupReconCluster(userId, modelId)
+        : await cleanupGoldenRecord(userId, modelId);
+
+      const deletedRaw = Number(result?.deleted);
+      const remainingRaw = Number(result?.remaining);
+
+      let msg = `Cleanup completed for the table "${table}".`;
+      if (Number.isFinite(deletedRaw)) msg += ` Deleted: ${fmtInt(deletedRaw)}.`;
+      if (Number.isFinite(remainingRaw)) msg += ` Remaining: ${fmtInt(remainingRaw)}.`;
+
+      setCleanupNotice(msg);
 
       setConfirmOpen(false);
       setConfirmKind("");
@@ -893,8 +983,6 @@ export default function MdmPage() {
       setConfirmBusy(false);
     }
   }
-
-
 
 
   function onLogoError() {
@@ -1307,8 +1395,12 @@ export default function MdmPage() {
                       <button
                         type="button"
                         title="Clear matches"
-                        disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0}
+                        aria-disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0}
+                        tabIndex={(!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0) ? -1 : 0}
                         onClick={() => {
+                          const isDisabled = !currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0;
+                          if (isDisabled) return;
+
                           setMatchActionsOpen(false);
                           setConfirmErr("");
                           setConfirmKind("recon");
@@ -1321,7 +1413,7 @@ export default function MdmPage() {
                           borderRadius: 10,
                           border: 0,
                           background: "transparent",
-                          cursor: "pointer",
+                          cursor: (!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0) ? "not-allowed" : "pointer",
                           color: "#000",
                           fontWeight: 800,
                           fontSize: 13,
@@ -1329,7 +1421,7 @@ export default function MdmPage() {
                           whiteSpace: "nowrap",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
-                          opacity: (!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0) ? 0.45 : 1,
+                          opacity: 1,
                         }}
                       >
                         Clear matches
@@ -1338,8 +1430,12 @@ export default function MdmPage() {
                       <button
                         type="button"
                         title="Clear golden records"
-                        disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0}
+                        aria-disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0}
+                        tabIndex={(!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0) ? -1 : 0}
                         onClick={() => {
+                          const isDisabled = !currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0;
+                          if (isDisabled) return;
+
                           setMatchActionsOpen(false);
                           setConfirmErr("");
                           setConfirmKind("golden");
@@ -1352,7 +1448,7 @@ export default function MdmPage() {
                           borderRadius: 10,
                           border: 0,
                           background: "transparent",
-                          cursor: "pointer",
+                          cursor: (!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0) ? "not-allowed" : "pointer",
                           color: "#000",
                           fontWeight: 800,
                           fontSize: 13,
@@ -1360,7 +1456,7 @@ export default function MdmPage() {
                           whiteSpace: "nowrap",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
-                          opacity: (!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0) ? 0.45 : 1,
+                          opacity: 1,
                         }}
                       >
                         Clear golden records
@@ -1479,7 +1575,9 @@ export default function MdmPage() {
             <div className="mdmCard__head mdmRecordsHead">
               <div>
                 <div className="mdmCard__title">Records</div>
-                <div className="mdmCard__sub">Golden / Match / Exceptions (table)</div>
+                <div className="mdmCard__sub">
+                  {recordsErr ? `Records error: ${recordsErr}` : "Golden / Match / Exceptions (table)"}
+                </div>
               </div>
 
               <div className="mdmInputWithIcon mdmRecordsSearch">
@@ -1491,6 +1589,7 @@ export default function MdmPage() {
                   placeholder="Filter master_id"
                   aria-label="Filter by master_id"
                 />
+
                 {masterIdFilter ? (
                   <button
                     type="button"
@@ -1556,17 +1655,58 @@ export default function MdmPage() {
 
             <div className="mdmCard__body">
 
+              {cleanupNotice ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  style={{
+                    marginBottom: 10,
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    background: "rgba(0,0,0,0.06)",
+                    color: "#000",
+                    fontWeight: 900,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                  }}
+                >
+                  <span style={{ flex: "1 1 auto" }}>{cleanupNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setCleanupNotice("")}
+                    aria-label="Dismiss cleanup notice"
+                    title="Dismiss"
+                    style={{
+                      flex: "0 0 auto",
+                      border: 0,
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontSize: 16,
+                      lineHeight: "16px",
+                      fontWeight: 900,
+                      color: "#000",
+                      padding: 0,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : null}
+
               <div className="mdmWideTableWrap">
                 <table className={`mdmWideTable ${view === "exceptions" ? "isExceptions" : "isGolden"}`}>
+
 
                   <thead>
                     <tr>
                       <th>matching_model</th>
                       <th>master_id</th>
                       <th>match_threshold</th>
-                      <th>survivorship_strategy</th>
+                      <th>survivorship_json</th>
                       {USER_FIELD_KEYS.map((k) => (
-                        <th key={k}>{k.toUpperCase()}</th>
+                        <th key={k}>{userFieldLabelByKey[k] || k.toUpperCase()}</th>
                       ))}
                       <th>created_at</th>
                       <th>created_by</th>
@@ -1587,7 +1727,24 @@ export default function MdmPage() {
                           <td className="mdmMono">{r.matching_model}</td>
                           <td className="mdmMono">{r.master_id}</td>
                           <td className="mdmMono">{String(r.match_threshold)}</td>
-                          <td>{r.survivorship_strategy}</td>
+                          <td>
+                            {String(r.survivorship_strategy || "").trim() ? (
+                              <button
+                                type="button"
+                                className="mdmBtn mdmBtn--xs mdmBtn--soft"
+                                onClick={() => openJsonPopup(
+                                  `Survivorship JSON (master_id: ${String(r.master_id || "—")})`,
+                                  r.survivorship_strategy
+                                )}
+                                aria-label="Open survivorship JSON"
+                                title="Open survivorship JSON"
+                              >
+                                JSON
+                              </button>
+                            ) : (
+                              <span className="mdmTiny">—</span>
+                            )}
+                          </td>
 
                           {USER_FIELD_KEYS.map((k) => (
                             <td key={k}>{String(r[k] || "").trim() ? r[k] : "—"}</td>
@@ -1783,6 +1940,37 @@ export default function MdmPage() {
                   <div className="mdmTiny">Use the <b>Account</b> menu for Login/Logout.</div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+
+      {jsonPopupOpen ? (
+        <div
+          className="mdmOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={String(jsonPopupTitle || "JSON")}
+        >
+          <div className="mdmDialog" style={{ width: 780, maxWidth: "min(92vw, 780px)" }}>
+            <div className="mdmDialog__head">
+              <div>
+                <div className="mdmDialog__title">{String(jsonPopupTitle || "JSON")}</div>
+                <div className="mdmDialog__sub">JSON viewer</div>
+              </div>
+              <button
+                className="mdmX"
+                type="button"
+                onClick={() => setJsonPopupOpen(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mdmDialog__body">
+              <pre className="mdmPre">{safeJsonFromStringMaybe(jsonPopupPayload)}</pre>
             </div>
           </div>
         </div>

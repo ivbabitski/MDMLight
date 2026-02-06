@@ -436,7 +436,7 @@ def mdm_update_model(model_id: str):
     if not ok:
         return jsonify({"error": "mdm model not found"}), 404
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "message": "model updated.."})
 
 @bp.delete("/mdm/models/<model_id>")
 def mdm_delete_model(model_id: str):

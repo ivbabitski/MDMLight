@@ -100,13 +100,13 @@ def list_recon_cluster_records():
     params: List[Any] = [app_user_id, model_id]
 
 
-    # Treat any non-'match' status as an exception for the UI toggle.
-    if status_mode == "match":
-        where_parts.append("lower(coalesce(match_status, 'match')) = 'match'")
-    else:
+    # "match" = full recon_cluster (no match_status filtering).
+    # "exceptions" = only rows flagged as exceptions.
+    if status_mode == "exceptions":
         where_parts.append("lower(coalesce(match_status, 'match')) <> 'match'")
 
     where_sql = " AND ".join(where_parts)
+
 
     sql = (
         f"SELECT {', '.join(cols)} "

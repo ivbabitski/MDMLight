@@ -610,8 +610,16 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                               height: 16,
                               flex: "0 0 16px",
                               margin: 0,
-                              accentColor: "#dc2626",
                               cursor: "pointer",
+
+                              appearance: "none",
+                              WebkitAppearance: "none",
+                              MozAppearance: "none",
+
+                              boxSizing: "border-box",
+                              borderRadius: 4,
+                              border: isSelected ? "1px solid #dc2626" : "1px solid rgba(0,0,0,0.28)",
+                              background: isSelected ? "#dc2626" : "#fff",
                             }}
                           />
 

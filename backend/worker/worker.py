@@ -1287,13 +1287,26 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 ).fetchone()["n"]
             )
 
+            # Incremental mode must still cluster the incoming batch against itself.
+            # Otherwise: identical new records processed in the same run will fragment into
+            # separate new clusters because they are not yet present in recon_cluster.
+            norm_rows: List[Dict[str, str]] = []
+            selected_values: List[List[str]] = []
             for r in src_rows:
-                # normalized inputs for match fields
-                norm_by_field: Dict[str, str] = {}
+                nb: Dict[str, str] = {}
                 for f in cfg["selected_fields"]:
-                    norm_by_field[f] = _norm(r[f])
+                    nb[f] = _norm(r[f])
+                norm_rows.append(nb)
+                selected_values.append([nb[f] for f in cfg["selected_fields"]])
 
-                incoming_selected = [norm_by_field[f] for f in cfg["selected_fields"]]
+            prefix_index = _build_prefix_index_for_batch(cfg, norm_rows)
+            assigned_cluster_batch: List[Optional[str]] = [None] * len(src_rows)
+
+            for i, r in enumerate(src_rows):
+                # normalized inputs for match fields
+                norm_by_field = norm_rows[i]
+
+                incoming_selected = selected_values[i]
 
                 cand_rows = _adaptive_candidates(
                     conn,
@@ -1330,6 +1343,31 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                             best_source_name = str(c["source_name"])
                             best_source_id = str(c["source_id"])
 
+                # Also consider already-processed records in the same incoming batch.
+                # This prevents within-run fragmentation in incremental mode.
+                cand_idxs_batch = _adaptive_candidates_batch(i, cfg, norm_rows, prefix_index)
+                if cand_idxs_batch:
+                    for j in cand_idxs_batch:
+                        cid = assigned_cluster_batch[j]
+                        if cid is None:
+                            continue
+
+                        s = float(
+                            weighted_gated_score(
+                                incoming_selected,
+                                selected_values[j],
+                                cfg["weights"],
+                                cfg["thresholds"],
+                            )
+                        )
+                        total_pairs_scored += 1
+
+                        if s > best_score or (s == best_score and (best_cluster_id is None or cid < best_cluster_id)):
+                            best_score = s
+                            best_cluster_id = cid
+                            best_source_name = str(src_rows[j]["source_name"])
+                            best_source_id = str(src_rows[j]["source_id"])
+
                 # classification + cluster_id assignment
                 if best_cluster_id and best_score >= float(cfg["model_T"]):
                     match_status = "match"
@@ -1347,6 +1385,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                     match_score = 0.0
                     new_cluster_count += 1
 
+                assigned_cluster_batch[i] = cluster_id
+
                 record_id = _make_record_id(app_user_id, model_id, r["source_name"], r["source_id"])
 
                 vals: List[Any] = [
@@ -1363,8 +1403,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 if recon_has_cluster_size:
                     vals.insert(1, 1)
 
-                for i in range(1, 21):
-                    vals.append(r[f"f{str(i).zfill(2)}"])
+                for k in range(1, 21):
+                    vals.append(r[f"f{str(k).zfill(2)}"])
 
                 vals.append(r["created_at"])
                 vals.append(r["created_by"])
@@ -1415,6 +1455,7 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                     )
 
             total_clusters = new_cluster_count
+
 
         if recon_inserts:
             conn.executemany(
