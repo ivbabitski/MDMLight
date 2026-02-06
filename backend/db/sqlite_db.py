@@ -801,7 +801,16 @@ def init_recon_cluster():
                 """
             )
             conn.execute("DROP TABLE recon_cluster_old")
+        _ensure_app_user_id(conn, "recon_cluster")
+        _ensure_column(conn, "recon_cluster", "model_id", "model_id TEXT")
         _ensure_column(conn, "recon_cluster", "model_name", "model_name TEXT")
+        _ensure_column(conn, "recon_cluster", "cluster_id", "cluster_id TEXT")
+        _ensure_column(conn, "recon_cluster", "source_name", "source_name TEXT")
+        _ensure_column(conn, "recon_cluster", "source_id", "source_id TEXT")
+        _ensure_column(conn, "recon_cluster", "created_at", "created_at TEXT")
+        _ensure_column(conn, "recon_cluster", "created_by", "created_by TEXT")
+        _ensure_column(conn, "recon_cluster", "updated_at", "updated_at TEXT")
+        _ensure_column(conn, "recon_cluster", "updated_by", "updated_by TEXT")
         _ensure_column(conn, "recon_cluster", "match_status", "match_status TEXT DEFAULT 'match'")
         _ensure_column(conn, "recon_cluster", "match_score", "match_score REAL")
         for i in range(1, 21):
@@ -952,8 +961,21 @@ def init_golden_record() -> None:
         )
         _ensure_app_user_id(conn, "golden_record")
         _ensure_column(conn, "golden_record", "model_id", "model_id TEXT")
+        _ensure_column(conn, "golden_record", "job_id", "job_id TEXT")
+        _ensure_column(conn, "golden_record", "source_name", "source_name TEXT")
+        _ensure_column(conn, "golden_record", "match_threshold", "match_threshold REAL")
+        _ensure_column(conn, "golden_record", "survivorship_json", "survivorship_json TEXT")
+        _ensure_column(conn, "golden_record", "representative_record_id", "representative_record_id TEXT")
         _ensure_column(conn, "golden_record", "representative_source_name", "representative_source_name TEXT")
         _ensure_column(conn, "golden_record", "representative_source_id", "representative_source_id TEXT")
+        _ensure_column(conn, "golden_record", "lineage_json", "lineage_json TEXT")
+        _ensure_column(conn, "golden_record", "created_at", "created_at TEXT")
+        _ensure_column(conn, "golden_record", "created_by", "created_by TEXT")
+        _ensure_column(conn, "golden_record", "updated_at", "updated_at TEXT")
+        _ensure_column(conn, "golden_record", "updated_by", "updated_by TEXT")
+        for i in range(1, 21):
+            c = f"f{str(i).zfill(2)}"
+            _ensure_column(conn, "golden_record", c, f"{c} TEXT")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_golden_record_job_id ON golden_record(job_id)"

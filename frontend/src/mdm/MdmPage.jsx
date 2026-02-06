@@ -190,6 +190,82 @@ async function fetchMatchingSummary(appUserId, modelId) {
 }
 
 
+async function cleanupReconCluster(appUserId, modelId) {
+  const base = String(API_BASE || "").trim();
+  const mid = String(modelId || "").trim();
+  const url = `${base}/api/cleanup/recon-cluster?t=${Date.now()}`;
+
+  const userId = String(appUserId || "").trim();
+
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  if (userId) headers["X-User-Id"] = userId;
+
+  const res = await fetch(url, {
+    method: "DELETE",
+    cache: "no-store",
+    headers,
+    body: JSON.stringify({ mdm_model_id: mid }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`cleanup recon-cluster failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
+  }
+
+  const ct = String(res.headers.get("content-type") || "");
+  if (!ct.toLowerCase().includes("application/json")) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(
+      `cleanup recon-cluster expected JSON but got "${ct || "unknown"}". ` +
+        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
+    );
+  }
+
+  return res.json();
+}
+
+
+async function cleanupGoldenRecord(appUserId, modelId) {
+  const base = String(API_BASE || "").trim();
+  const mid = String(modelId || "").trim();
+  const url = `${base}/api/cleanup/golden-record?t=${Date.now()}`;
+
+  const userId = String(appUserId || "").trim();
+
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  if (userId) headers["X-User-Id"] = userId;
+
+  const res = await fetch(url, {
+    method: "DELETE",
+    cache: "no-store",
+    headers,
+    body: JSON.stringify({ mdm_model_id: mid }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`cleanup golden-record failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
+  }
+
+  const ct = String(res.headers.get("content-type") || "");
+  if (!ct.toLowerCase().includes("application/json")) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(
+      `cleanup golden-record expected JSON but got "${ct || "unknown"}". ` +
+        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
+    );
+  }
+
+  return res.json();
+}
+
+
 export default function MdmPage() {
 
 
@@ -219,6 +295,14 @@ export default function MdmPage() {
 
   const [matchingSummary, setMatchingSummary] = useState(null);
   const [matchingSummaryErr, setMatchingSummaryErr] = useState("");
+
+  const [matchActionsOpen, setMatchActionsOpen] = useState(false);
+  const matchActionsRef = useRef(null);
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmKind, setConfirmKind] = useState(""); // "recon" | "golden"
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmErr, setConfirmErr] = useState("");
 
   const refreshSourceSummary = useCallback(async () => {
     const userId = String(currentUserId || "").trim();
@@ -321,6 +405,28 @@ export default function MdmPage() {
 
 
   useEffect(() => {
+    function onMouseDown(e) {
+      if (!matchActionsOpen) return;
+      if (matchActionsRef.current && !matchActionsRef.current.contains(e.target)) {
+        setMatchActionsOpen(false);
+      }
+    }
+
+    function onKeyDown(e) {
+      if (!matchActionsOpen) return;
+      if (e.key === "Escape") setMatchActionsOpen(false);
+    }
+
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [matchActionsOpen]);
+
+
+  useEffect(() => {
     refreshSourceSummary();
   }, [refreshSourceSummary]);
 
@@ -376,6 +482,14 @@ export default function MdmPage() {
     const pills = Array.isArray(sourceSummary?.field_pills) ? sourceSummary.field_pills : [];
     return pills.map((x) => String(x || "").trim()).filter(Boolean);
   }, [sourceSummary]);
+
+
+  const matchingFieldPills = useMemo(() => {
+    const pills = Array.isArray(matchingSummary?.match_field_pills)
+      ? matchingSummary.match_field_pills
+      : [];
+    return pills.map((x) => String(x || "").trim()).filter(Boolean);
+  }, [matchingSummary]);
 
 
   const matchKeys = useMemo(() => job?.model_json?.match_fields || [], [job]);
@@ -569,6 +683,51 @@ export default function MdmPage() {
       source_name: row.source_name,
       source_id: row.source_id,
     });
+  }
+
+
+  async function runCleanup(kind) {
+    const userId = String(currentUserId || "").trim();
+    if (!userId) {
+      setConfirmErr("X-User-Id is required (login)");
+      return;
+    }
+
+    let modelId = "";
+    try {
+      modelId = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+    } catch {}
+
+    if (!modelId) {
+      setConfirmErr("model_id is required (select a model)");
+      return;
+    }
+
+    if (kind !== "recon" && kind !== "golden") {
+      setConfirmErr("Invalid action");
+      return;
+    }
+
+    setConfirmBusy(true);
+    setConfirmErr("");
+
+    try {
+      if (kind === "recon") {
+        await cleanupReconCluster(userId, modelId);
+      } else {
+        await cleanupGoldenRecord(userId, modelId);
+      }
+
+      setConfirmOpen(false);
+      setConfirmKind("");
+      setMatchActionsOpen(false);
+
+      await refreshMatchingSummary();
+    } catch (e) {
+      setConfirmErr(String(e?.message || e));
+    } finally {
+      setConfirmBusy(false);
+    }
   }
 
 
@@ -917,20 +1076,132 @@ export default function MdmPage() {
                       : `Model: ${String(matchingSummary?.model_name || "—")} (id: ${String(selectedModelId || "—")})`}
                   </div>
                 </div>
-                <button
-                  className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
-                  type="button"
-                  onClick={refreshMatchingSummary}
-                  title="Refresh matching stats"
-                  aria-label="Refresh matching stats"
+
+                <div
+                  ref={matchActionsRef}
+                  onMouseLeave={() => setMatchActionsOpen(false)}
+                  style={{
+                    position: "relative",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    justifyContent: "center",
+                  }}
                 >
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M3 12a9 9 0 0 1 15-6.7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                  <path d="M3 4v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M21 12a9 9 0 0 1-15 6.7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                  <path d="M21 20v-6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-                </button>
+                  <button
+                    className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
+                    type="button"
+                    onClick={refreshMatchingSummary}
+                    title="Refresh matching stats"
+                    aria-label="Refresh matching stats"
+                  >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M3 12a9 9 0 0 1 15-6.7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M3 4v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M21 12a9 9 0 0 1-15 6.7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M21 20v-6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  </button>
+
+                  <button
+                    className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
+                    type="button"
+                    onClick={() => {
+                      setAccountMenuOpen(false);
+                      setMatchActionsOpen((v) => !v);
+                    }}
+                    title="Actions"
+                    aria-label="Actions"
+                  >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <circle cx="12" cy="5" r="1.8" fill="currentColor" />
+                      <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+                      <circle cx="12" cy="19" r="1.8" fill="currentColor" />
+                    </svg>
+                  </button>
+
+                  {matchActionsOpen ? (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "calc(100% + 10px)",
+                        right: 0,
+                        minWidth: 270,
+                        background: "rgba(255,255,255,0.98)",
+                        border: "1px solid rgba(0,0,0,0.12)",
+                        borderRadius: 12,
+                        padding: 6,
+                        boxShadow: "0 14px 40px rgba(0,0,0,0.25)",
+                        zIndex: 60,
+                        color: "rgba(17,24,39,0.92)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 4,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        title="Clear matches"
+                        disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0}
+                        onClick={() => {
+                          setMatchActionsOpen(false);
+                          setConfirmErr("");
+                          setConfirmKind("recon");
+                          setConfirmOpen(true);
+                        }}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: 0,
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontWeight: 800,
+                          fontSize: 13,
+                          lineHeight: "16px",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          opacity: (!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0) ? 0.45 : 1,
+                        }}
+                      >
+                        Clear matches
+                      </button>
+
+                      <button
+                        type="button"
+                        title="Clear golden records"
+                        disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0}
+                        onClick={() => {
+                          setMatchActionsOpen(false);
+                          setConfirmErr("");
+                          setConfirmKind("golden");
+                          setConfirmOpen(true);
+                        }}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: 0,
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontWeight: 800,
+                          fontSize: 13,
+                          lineHeight: "16px",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          opacity: (!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0) ? 0.45 : 1,
+                        }}
+                      >
+                        Clear golden records
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div className="mdmCard__body">
@@ -953,8 +1224,8 @@ export default function MdmPage() {
 
                 <div className="mdmSectionTitle">Matching fields</div>
                 <div className="mdmPillRow">
-                  {Array.isArray(matchingSummary?.match_field_pills) && matchingSummary.match_field_pills.length ? (
-                    matchingSummary.match_field_pills.map((lbl) => (
+                  {matchingFieldPills.length ? (
+                    matchingFieldPills.map((lbl) => (
                       <span className="mdmPillSoft" key={String(lbl)}>{String(lbl)}</span>
                     ))
                   ) : (
@@ -1280,6 +1551,70 @@ export default function MdmPage() {
                 <div>
                   <div className="mdmLabel">Account</div>
                   <div className="mdmTiny">Use the <b>Account</b> menu for Login/Logout.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+
+      {confirmOpen ? (
+        <div className="mdmOverlay" role="dialog" aria-modal="true" aria-label="Confirm cleanup">
+          <div className="mdmDialog" style={{ width: 460 }}>
+            <div className="mdmDialog__head">
+              <div>
+                <div className="mdmDialog__title">
+                  {confirmKind === "recon" ? "Clear matches?" : "Clear golden records?"}
+                </div>
+                <div className="mdmDialog__sub">
+                  {confirmKind === "recon"
+                    ? "This deletes recon_cluster rows for the selected model and user."
+                    : "This deletes golden_record rows for the selected model and user."}
+                </div>
+              </div>
+              <button
+                className="mdmX"
+                type="button"
+                onClick={() => {
+                  if (!confirmBusy) setConfirmOpen(false);
+                }}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mdmDialog__body">
+              <div style={{ padding: 18, display: "grid", gap: 12 }}>
+                <div className="mdmTiny">
+                  Model id: <span className="mdmMono">{String(selectedModelId || "—")}</span>
+                </div>
+
+                {confirmErr ? (
+                  <div className="mdmTiny" style={{ color: "rgba(220,38,38,0.95)", fontWeight: 900 }}>
+                    {confirmErr}
+                  </div>
+                ) : null}
+
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button
+                    className="mdmBtn mdmBtn--soft"
+                    type="button"
+                    onClick={() => setConfirmOpen(false)}
+                    disabled={confirmBusy}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    className="mdmBtn mdmBtn--danger"
+                    type="button"
+                    onClick={() => runCleanup(confirmKind)}
+                    disabled={confirmBusy}
+                  >
+                    {confirmBusy ? "Clearing..." : "Clear"}
+                  </button>
                 </div>
               </div>
             </div>

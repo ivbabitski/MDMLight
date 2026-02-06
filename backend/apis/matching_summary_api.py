@@ -142,6 +142,37 @@ def matching_summary():
         advanced = bool(cfg.get("advanced"))
         global_rule = str(cfg.get("globalRule") or "").strip()
 
+        def _as_float(v):
+            if v is None:
+                return None
+            s = str(v).strip()
+            if not s:
+                return None
+            try:
+                return float(s)
+            except Exception:
+                return None
+
+        def _field_match_threshold(fd: dict):
+            if not isinstance(fd, dict):
+                return None
+
+            v = fd.get("match_threshold")
+            if v is None:
+                v = fd.get("matchThreshold")
+            if v is None:
+                v = fd.get("threshold")
+            if v is None:
+                m = fd.get("match")
+                if isinstance(m, dict):
+                    v = m.get("match_threshold")
+                    if v is None:
+                        v = m.get("matchThreshold")
+                    if v is None:
+                        v = m.get("threshold")
+
+            return _as_float(v)
+
         matching_fields = []
         rules_to_fields = {}
 
@@ -165,19 +196,23 @@ def matching_summary():
 
             rule_code = str(f.get("rule") or global_rule or "").strip()
 
-            matching_fields.append(
-                {
-                    "code": code,
-                    "label": label,
-                    "weight": weight,
-                    "weight_pct": int(round(weight * 100.0)),
-                    "rule": rule_code,
-                    "rule_label": _rule_label(rule_code),
-                }
-            )
-
             if rule_code:
                 rules_to_fields.setdefault(rule_code, []).append(code)
+
+            match_threshold = _field_match_threshold(f)
+
+            if weight > 0.0 and match_threshold is not None:
+                matching_fields.append(
+                    {
+                        "code": code,
+                        "label": label,
+                        "weight": weight,
+                        "weight_pct": int(round(weight * 100.0)),
+                        "match_threshold": match_threshold,
+                        "rule": rule_code,
+                        "rule_label": _rule_label(rule_code),
+                    }
+                )
 
         match_field_pills = [x["label"] for x in matching_fields if str(x.get("label") or "").strip()]
 

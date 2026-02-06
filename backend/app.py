@@ -28,6 +28,9 @@ def create_app() -> Flask:
     from apis.source_input_api import bp as source_input_bp
     from apis.source_systems_api import bp as source_systems_bp
     from apis.matching_summary_api import bp as matching_summary_bp
+    from apis.cleanup_recon_cluster_api import bp as cleanup_recon_cluster_bp
+    from apis.cleanup_golden_record_api import bp as cleanup_golden_record_bp
+
 
     app.register_blueprint(system_bp)
     app.register_blueprint(ingestion_bp)
@@ -38,6 +41,8 @@ def create_app() -> Flask:
     app.register_blueprint(source_input_bp)
     app.register_blueprint(source_systems_bp)
     app.register_blueprint(matching_summary_bp)
+    app.register_blueprint(cleanup_recon_cluster_bp)
+    app.register_blueprint(cleanup_golden_record_bp)
 
 
     return app

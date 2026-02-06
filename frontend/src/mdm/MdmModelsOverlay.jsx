@@ -93,6 +93,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
 
 
   const [jsonOpenId, setJsonOpenId] = useState("");
+  const [selectedModelId, setSelectedModelId] = useState("");
 
   const userLabel = String(currentUser || getAuthUsername() || "").trim();
   const COLS = "minmax(160px, 280px) minmax(260px, 1fr) 140px 180px 180px 260px";
@@ -381,6 +382,8 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
       else localStorage.removeItem(LS_SELECTED_MODEL_ID);
     } catch {}
 
+    setSelectedModelId(id);
+
     try {
       window.dispatchEvent(new CustomEvent("mdm:selected_model_changed", { detail: { model_id: id } }));
     } catch {}
@@ -403,6 +406,13 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
       });
       pollTimersRef.current = {};
       return;
+    }
+
+    try {
+      const sid = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+      setSelectedModelId(sid);
+    } catch {
+      setSelectedModelId("");
     }
 
     loadModels();
@@ -568,7 +578,11 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                   return (
                     <React.Fragment key={m.id}>
                       <div
-                        className="mdmTRow"
+                        className={
+                          String(m.id || "") === String(selectedModelId || "")
+                            ? "mdmTRow mdmTRow--selectable mdmTRow--selected"
+                            : "mdmTRow mdmTRow--selectable"
+                        }
                         onClick={() => selectModel(m)}
                         style={{
                           gridTemplateColumns: COLS,
