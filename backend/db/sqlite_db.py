@@ -805,6 +805,8 @@ def init_recon_cluster():
         _ensure_column(conn, "recon_cluster", "model_id", "model_id TEXT")
         _ensure_column(conn, "recon_cluster", "model_name", "model_name TEXT")
         _ensure_column(conn, "recon_cluster", "cluster_id", "cluster_id TEXT")
+        _ensure_column(conn, "recon_cluster", "job_id", "job_id TEXT")
+        _ensure_column(conn, "recon_cluster", "record_id", "record_id TEXT")
         _ensure_column(conn, "recon_cluster", "source_name", "source_name TEXT")
         _ensure_column(conn, "recon_cluster", "source_id", "source_id TEXT")
         _ensure_column(conn, "recon_cluster", "created_at", "created_at TEXT")
@@ -816,6 +818,7 @@ def init_recon_cluster():
         for i in range(1, 21):
             c = f"f{str(i).zfill(2)}"
             _ensure_column(conn, "recon_cluster", c, f"{c} TEXT")
+
 
         conn.execute("CREATE INDEX IF NOT EXISTS ix_recon_cluster_cluster_id ON recon_cluster(cluster_id)")
         conn.execute(

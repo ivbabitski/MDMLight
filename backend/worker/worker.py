@@ -8,8 +8,8 @@ import multiprocessing as mp
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple, Optional
 
-from .levenshtein import weighted_gated_score
-
+from worker.levenshtein import weighted_gated_score
+from worker.survivorship import run_survivorship
 
 from db.sqlite_db import get_conn, init_all_tables
 
@@ -856,16 +856,26 @@ def _seed_recon_cluster_from_source_input(app_user_id: int, model_id: str, model
         + ["created_at", "created_by", "updated_at", "updated_by"]
     )
 
-    insert_cols = (
-        ["cluster_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
-        + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
-        + ["created_at", "created_by", "updated_at", "updated_by", "match_status"]
-    )
-
-    placeholders = ", ".join(["?"] * len(insert_cols))
     now = _utc_now_iso()
 
     with get_conn() as conn:
+        # Compatibility: some DBs have recon_cluster.cluster_size defined as NOT NULL.
+        # If present, we must supply it on INSERT.
+        recon_cols = conn.execute("PRAGMA table_info(recon_cluster)").fetchall()
+        recon_has_cluster_size = any(str(r["name"]) == "cluster_size" for r in recon_cols)
+
+        insert_cols = (
+            ["cluster_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
+            + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+            + ["created_at", "created_by", "updated_at", "updated_by", "match_status"]
+        )
+
+        if recon_has_cluster_size:
+            insert_cols = list(insert_cols)
+            insert_cols.insert(1, "cluster_size")
+
+        placeholders = ", ".join(["?"] * len(insert_cols))
+
         rows = conn.execute(
             f"SELECT {', '.join(src_cols)} FROM source_input WHERE app_user_id=?",
             (app_user_id,),
@@ -897,6 +907,9 @@ def _seed_recon_cluster_from_source_input(app_user_id: int, model_id: str, model
             vals.append(r["updated_at"])
             vals.append(r["updated_by"])
             vals.append("no_match")
+
+            if recon_has_cluster_size:
+                vals.insert(1, 1)
 
             to_insert.append(tuple(vals))
 
@@ -961,7 +974,6 @@ def _step1_recon_cluster_sync(app_user_id: int, model_id: str) -> Tuple[int, int
     rows = _load_recon_cluster_rows(app_user_id, model_id)
     return len(rows), inserted
 
-
 def run_one_job(job_id: str, match_workers: int) -> None:
     # Load job row
     with get_conn() as conn:
@@ -995,7 +1007,9 @@ def run_one_job(job_id: str, match_workers: int) -> None:
             _set_job_status(job_id, "failed", f"failed_to_load_model_config: {e}")
             return
 
-    model = _normalize_model_json(raw_model)
+    surv_model = raw_model.get("config") if isinstance(raw_model.get("config"), dict) else raw_model
+
+    model = _normalize_model_json(surv_model)
     if not model:
         _set_job_status(job_id, "failed", "model_json/config is empty or invalid")
         return
@@ -1018,6 +1032,20 @@ def run_one_job(job_id: str, match_workers: int) -> None:
     # STEP 2: load NEW source_input rows (incremental) OR full batch (bootstrap when recon is empty)
     src_rows = _load_unprocessed_source_input_rows(app_user_id, model_id)
     if not src_rows:
+        try:
+            run_survivorship(job_id=job_id, app_user_id=int(app_user_id), model=surv_model, actor="match_worker")
+        except Exception as e:
+            _set_job_status(
+                job_id,
+                "failed",
+                f"survivorship_failed: {e}",
+                total_records=0,
+                total_matches=0,
+                total_clusters=0,
+                total_pairs_scored=0,
+            )
+            return
+
         _set_job_status(
             job_id,
             "completed",
@@ -1029,19 +1057,30 @@ def run_one_job(job_id: str, match_workers: int) -> None:
         )
         return
 
+
     model_name = _load_model_name_from_mdm_models(model_id)
     now = _utc_now_iso()
 
+    # Compatibility: some DBs have recon_cluster.cluster_size defined as NOT NULL.
+    # If present, we must supply it on INSERT.
+    with get_conn() as conn:
+        recon_cols_info = conn.execute("PRAGMA table_info(recon_cluster)").fetchall()
+        recon_has_cluster_size = any(str(r["name"]) == "cluster_size" for r in recon_cols_info)
+
     recon_cols = (
-        ["cluster_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
+        ["cluster_id", "job_id", "record_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
         + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
         + ["created_at", "created_by", "updated_at", "updated_by", "match_status", "match_score"]
     )
+
+    if recon_has_cluster_size:
+        recon_cols.insert(1, "cluster_size")
     recon_placeholders = ", ".join(["?"] * len(recon_cols))
 
     recon_inserts: List[Tuple[Any, ...]] = []
     map_rows: List[Tuple[Any, ...]] = []
     exc_rows: List[Tuple[Any, ...]] = []
+
 
     match_count = 0
     exception_count = 0
@@ -1194,14 +1233,21 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                     match_scores[i] = 0.0
                     new_cluster_count += 1
 
+                record_id = _make_record_id(app_user_id, model_id, r["source_name"], r["source_id"])
+
                 vals: List[Any] = [
                     cid,
+                    job_id,
+                    record_id,
                     model_id,
                     model_name,
                     r["source_name"],
                     r["source_id"],
                     app_user_id,
                 ]
+
+                if recon_has_cluster_size:
+                    vals.insert(1, 1)
 
                 for k in range(1, 21):
                     vals.append(r[f"f{str(k).zfill(2)}"])
@@ -1227,7 +1273,9 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                     )
                 )
 
+
             total_clusters = len(set([c for c in assigned_cluster if c is not None]))
+
         else:
             # Mode B: Incremental run — match only NEW source_input rows into existing clusters
             total_clusters = 0
@@ -1299,14 +1347,21 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                     match_score = 0.0
                     new_cluster_count += 1
 
+                record_id = _make_record_id(app_user_id, model_id, r["source_name"], r["source_id"])
+
                 vals: List[Any] = [
                     cluster_id,
+                    job_id,
+                    record_id,
                     model_id,
                     model_name,
                     r["source_name"],
                     r["source_id"],
                     app_user_id,
                 ]
+
+                if recon_has_cluster_size:
+                    vals.insert(1, 1)
 
                 for i in range(1, 21):
                     vals.append(r[f"f{str(i).zfill(2)}"])
@@ -1319,6 +1374,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 vals.append(float(match_score))
 
                 recon_inserts.append(tuple(vals))
+
+
 
                 map_rows.append(
                     (
@@ -1365,6 +1422,31 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 recon_inserts,
             )
 
+            if recon_has_cluster_size:
+                affected_cluster_ids = sorted({str(t[0]) for t in recon_inserts if t and t[0]})
+                if affected_cluster_ids:
+                    chunk_size = 900
+                    for start in range(0, len(affected_cluster_ids), chunk_size):
+                        chunk = affected_cluster_ids[start : start + chunk_size]
+                        cluster_placeholders = ", ".join(["?"] * len(chunk))
+                        params: List[Any] = [app_user_id, model_id] + chunk
+                        conn.execute(
+                            f"""
+                            UPDATE recon_cluster
+                            SET cluster_size = (
+                                SELECT COUNT(*)
+                                FROM recon_cluster rc2
+                                WHERE rc2.app_user_id = recon_cluster.app_user_id
+                                  AND rc2.model_id = recon_cluster.model_id
+                                  AND rc2.cluster_id = recon_cluster.cluster_id
+                            )
+                            WHERE app_user_id = ?
+                              AND model_id = ?
+                              AND cluster_id IN ({cluster_placeholders})
+                            """,
+                            tuple(params),
+                        )
+
         if map_rows:
             conn.executemany(
                 """
@@ -1396,6 +1478,12 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 """,
                 exc_rows,
             )
+
+    try:
+        run_survivorship(job_id=job_id, app_user_id=int(app_user_id), model=surv_model, actor="match_worker")
+    except Exception as e:
+        _set_job_status(job_id, "failed", f"survivorship_failed: {e}")
+        return
 
     _set_job_status(
         job_id,

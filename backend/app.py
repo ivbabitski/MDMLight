@@ -30,6 +30,8 @@ def create_app() -> Flask:
     from apis.matching_summary_api import bp as matching_summary_bp
     from apis.cleanup_recon_cluster_api import bp as cleanup_recon_cluster_bp
     from apis.cleanup_golden_record_api import bp as cleanup_golden_record_bp
+    from apis.recon_cluster_records_api import bp as recon_cluster_records_bp
+    from apis.golden_record_records_api import bp as golden_record_records_bp
 
 
     app.register_blueprint(system_bp)
@@ -43,7 +45,8 @@ def create_app() -> Flask:
     app.register_blueprint(matching_summary_bp)
     app.register_blueprint(cleanup_recon_cluster_bp)
     app.register_blueprint(cleanup_golden_record_bp)
-
+    app.register_blueprint(recon_cluster_records_bp)
+    app.register_blueprint(golden_record_records_bp)
 
     return app
 

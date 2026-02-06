@@ -5,6 +5,8 @@
   flex-direction: column;
   padding: 14px;
   gap: 12px;
+  color: #000;
+  --muted: #000;
 }
 
 .mdm input { accent-color: var(--accent); }
@@ -414,8 +416,9 @@
   height: 36px;
   padding: 0;
   border-radius: 12px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 0;
 }
 

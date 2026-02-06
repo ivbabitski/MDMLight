@@ -190,6 +190,80 @@ async function fetchMatchingSummary(appUserId, modelId) {
 }
 
 
+async function fetchReconClusterRecords(appUserId, modelId, status) {
+  const base = String(API_BASE || "").trim();
+  const mid = String(modelId || "").trim();
+  const st = String(status || "match").trim();
+  const url =
+    `${base}/api/recon-cluster/records?model_id=${encodeURIComponent(mid)}` +
+    `&status=${encodeURIComponent(st)}` +
+    `&t=${Date.now()}`;
+
+  const userId = String(appUserId || "").trim();
+
+  const headers = {
+    Accept: "application/json",
+  };
+  if (userId) headers["X-User-Id"] = userId;
+
+  const res = await fetch(url, {
+    cache: "no-store",
+    headers,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`recon-cluster records failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
+  }
+
+  const ct = String(res.headers.get("content-type") || "");
+  if (!ct.toLowerCase().includes("application/json")) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(
+      `recon-cluster records expected JSON but got "${ct || "unknown"}". ` +
+        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
+    );
+  }
+
+  return res.json();
+}
+
+
+async function fetchGoldenRecordRecords(appUserId, modelId) {
+  const base = String(API_BASE || "").trim();
+  const mid = String(modelId || "").trim();
+  const url = `${base}/api/golden-record/records?model_id=${encodeURIComponent(mid)}&t=${Date.now()}`;
+
+  const userId = String(appUserId || "").trim();
+
+  const headers = {
+    Accept: "application/json",
+  };
+  if (userId) headers["X-User-Id"] = userId;
+
+  const res = await fetch(url, {
+    cache: "no-store",
+    headers,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`golden-record records failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
+  }
+
+  const ct = String(res.headers.get("content-type") || "");
+  if (!ct.toLowerCase().includes("application/json")) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(
+      `golden-record records expected JSON but got "${ct || "unknown"}". ` +
+        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
+    );
+  }
+
+  return res.json();
+}
+
+
 async function cleanupReconCluster(appUserId, modelId) {
   const base = String(API_BASE || "").trim();
   const mid = String(modelId || "").trim();
@@ -303,6 +377,8 @@ export default function MdmPage() {
   const [confirmKind, setConfirmKind] = useState(""); // "recon" | "golden"
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmErr, setConfirmErr] = useState("");
+
+  const [cleanupNotice, setCleanupNotice] = useState("");
 
   const refreshSourceSummary = useCallback(async () => {
     const userId = String(currentUserId || "").trim();
@@ -446,6 +522,7 @@ export default function MdmPage() {
 
   useEffect(() => {
     function onSelectedModelChanged() {
+      setCleanupNotice("");
       refreshSourceSummary();
       refreshMatchingSummary();
     }
@@ -465,12 +542,137 @@ export default function MdmPage() {
   const [page, setPage] = useState(0);
   const [modelOpen, setModelOpen] = useState(false);
 
+  const [records, setRecords] = useState([]);
+  const [recordsErr, setRecordsErr] = useState("");
+  const [recordsBusy, setRecordsBusy] = useState(false);
+
   const [promoted, setPromoted] = useState({}); // uiKey -> boolean (exceptions view)
 
   const job = MOCK_JOB;
 
 
+  function normalizeUiFieldsFromDbRow(row) {
+    const out = {};
+
+    for (let i = 1; i <= 20; i += 1) {
+      const dbKey = `f${String(i).padStart(2, "0")}`;
+      const uiKey = `f${i}`;
+      const v = row && row[dbKey] != null ? row[dbKey] : "";
+      out[uiKey] = String(v ?? "");
+    }
+
+    return out;
+  }
+
+
+  function toReconUiRow(row) {
+    const clusterId = row?.cluster_id != null ? String(row.cluster_id) : "";
+    const sourceName = row?.source_name != null ? String(row.source_name) : "";
+    const sourceId = row?.source_id != null ? String(row.source_id) : "";
+
+    const uiFields = normalizeUiFieldsFromDbRow(row);
+
+    return {
+      ...row,
+      uiKey: row?.id != null ? String(row.id) : `${clusterId}::${sourceName}::${sourceId}`,
+
+      matching_model: String(row?.model_name || row?.model_id || ""),
+      master_id: clusterId,
+      match_threshold: "",
+      survivorship_strategy: "",
+
+      cluster_id: clusterId,
+
+      created_at: row?.created_at != null ? String(row.created_at) : "",
+      created_by: row?.created_by != null ? String(row.created_by) : "",
+      updated_at: row?.updated_at != null ? String(row.updated_at) : "",
+      updated_by: row?.updated_by != null ? String(row.updated_by) : "",
+
+      ...uiFields,
+    };
+  }
+
+
+  function toGoldenUiRow(row) {
+    const masterId = row?.master_id != null ? String(row.master_id) : "";
+    const uiFields = normalizeUiFieldsFromDbRow(row);
+
+    return {
+      ...row,
+      uiKey: masterId,
+
+      matching_model: String(row?.model_id || ""),
+      master_id: masterId,
+      match_threshold: row?.match_threshold ?? "",
+      survivorship_strategy: String(row?.survivorship_json || ""),
+
+      cluster_id: masterId,
+
+      created_at: row?.created_at != null ? String(row.created_at) : "",
+      created_by: row?.created_by != null ? String(row.created_by) : "",
+      updated_at: row?.updated_at != null ? String(row.updated_at) : "",
+      updated_by: row?.updated_by != null ? String(row.updated_by) : "",
+
+      ...uiFields,
+    };
+  }
+
+
+  const refreshRecords = useCallback(async () => {
+    const userId = String(currentUserId || "").trim();
+    if (!userId) {
+      setRecords([]);
+      setRecordsErr("");
+      setRecordsBusy(false);
+      return;
+    }
+
+    let modelId = "";
+    try {
+      modelId = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+    } catch {}
+
+    if (!modelId) {
+      setRecords([]);
+      setRecordsErr("model_id is required (select a model)");
+      setRecordsBusy(false);
+      return;
+    }
+
+    if (modelId !== String(selectedModelId || "").trim()) {
+      setSelectedModelId(modelId);
+    }
+
+    setRecordsBusy(true);
+    setRecordsErr("");
+
+    try {
+      if (view === "golden") {
+        const data = await fetchGoldenRecordRecords(userId, modelId);
+        const recs = Array.isArray(data?.records) ? data.records : [];
+        setRecords(recs.map(toGoldenUiRow));
+      } else {
+        const status = view === "exceptions" ? "exceptions" : "match";
+        const data = await fetchReconClusterRecords(userId, modelId, status);
+        const recs = Array.isArray(data?.records) ? data.records : [];
+        setRecords(recs.map(toReconUiRow));
+      }
+    } catch (e) {
+      setRecords([]);
+      setRecordsErr(String(e?.message || e));
+    } finally {
+      setRecordsBusy(false);
+    }
+  }, [currentUserId, selectedModelId, view]);
+
+
+  useEffect(() => {
+    refreshRecords();
+  }, [refreshRecords]);
+
+
   const totalSourceRecords = useMemo(() => Number(sourceSummary?.total_records || 0), [sourceSummary]);
+
   const fieldsWithData = useMemo(() => Number(sourceSummary?.fields_with_data || 0), [sourceSummary]);
 
   const sourceFieldKeys = useMemo(() => {
@@ -484,12 +686,11 @@ export default function MdmPage() {
   }, [sourceSummary]);
 
 
-  const matchingFieldPills = useMemo(() => {
-    const pills = Array.isArray(matchingSummary?.match_field_pills)
-      ? matchingSummary.match_field_pills
-      : [];
-    return pills.map((x) => String(x || "").trim()).filter(Boolean);
+  const matchingFields = useMemo(() => {
+    const arr = Array.isArray(matchingSummary?.matching_fields) ? matchingSummary.matching_fields : [];
+    return arr.filter((x) => x && typeof x === "object");
   }, [matchingSummary]);
+
 
 
   const matchKeys = useMemo(() => job?.model_json?.match_fields || [], [job]);
@@ -501,37 +702,9 @@ export default function MdmPage() {
 
 
   const rows = useMemo(() => {
-    return (MOCK_RECON || []).map((r) => {
-      const f1 = String(r.fields?.name || "");
-      const f2 = String(r.fields?.email || "");
-      const f3 = String(r.fields?.phone || "");
-      const f4 = String(r.fields?.address || "");
-
-      const out = {
-        ...r,
-        job_id: job.job_id,
-        uiKey: `${r.cluster_id}::${r.record_id}`,
-
-        matching_model: String(job?.model_json?.matching_model || "Model v1"),
-        master_id: String(r.cluster_id),
-        match_threshold: job?.model_json?.match_threshold ?? "",
-        survivorship_strategy: String(job?.model_json?.survivorship_strategy || "Strategy 0"),
-
-        f1, f2, f3, f4,
-
-        created_at: "2026-01-29T00:00:00Z",
-        created_by: "system",
-        updated_at: "",
-        updated_by: "",
-      };
-
-      for (const k of USER_FIELD_KEYS) {
-        if (out[k] == null) out[k] = "";
-      }
-
-      return out;
-    });
-  }, [job]);
+    if (!Array.isArray(records)) return [];
+    return records;
+  }, [records]);
 
 
   const recordsPerSource = useMemo(() => {
@@ -544,21 +717,11 @@ export default function MdmPage() {
 
   const totalClusters = useMemo(() => new Set(rows.map((r) => r.cluster_id)).size, [rows]);
 
-  const goldenRows = useMemo(() => rows.filter((r) => r.is_representative === 1), [rows]);
-  const exceptionRows = useMemo(() => rows.filter((r) => r.is_representative !== 1), [rows]);
-
   const listRows = useMemo(() => {
     const query = q.trim().toLowerCase();
     const master = masterIdFilter.trim().toLowerCase();
 
-    let base = rows;
-
-    if (view === "golden") {
-      base = goldenRows;
-    } else if (view === "exceptions") {
-      const exceptionClusterIds = new Set(exceptionRows.map((r) => r.cluster_id));
-      base = rows.filter((r) => exceptionClusterIds.has(r.cluster_id));
-    }
+    const base = rows;
 
     const narrowed = master
       ? base.filter((r) => String(r.master_id || "").toLowerCase().includes(master))
@@ -581,7 +744,7 @@ export default function MdmPage() {
 
       return hay.includes(query);
     });
-  }, [exceptionRows, goldenRows, masterIdFilter, q, rows, view]);
+  }, [masterIdFilter, q, rows]);
 
 
   useEffect(() => {
@@ -723,6 +886,7 @@ export default function MdmPage() {
       setMatchActionsOpen(false);
 
       await refreshMatchingSummary();
+      await refreshRecords();
     } catch (e) {
       setConfirmErr(String(e?.message || e));
     } finally {
@@ -1133,7 +1297,7 @@ export default function MdmPage() {
                         padding: 6,
                         boxShadow: "0 14px 40px rgba(0,0,0,0.25)",
                         zIndex: 60,
-                        color: "rgba(17,24,39,0.92)",
+                        color: "#000",
                         display: "flex",
                         flexDirection: "column",
                         gap: 4,
@@ -1158,6 +1322,7 @@ export default function MdmPage() {
                           border: 0,
                           background: "transparent",
                           cursor: "pointer",
+                          color: "#000",
                           fontWeight: 800,
                           fontSize: 13,
                           lineHeight: "16px",
@@ -1188,6 +1353,7 @@ export default function MdmPage() {
                           border: 0,
                           background: "transparent",
                           cursor: "pointer",
+                          color: "#000",
                           fontWeight: 800,
                           fontSize: 13,
                           lineHeight: "16px",
@@ -1201,6 +1367,7 @@ export default function MdmPage() {
                       </button>
                     </div>
                   ) : null}
+
                 </div>
               </div>
 
@@ -1223,15 +1390,78 @@ export default function MdmPage() {
                 <div className="mdmDivider" />
 
                 <div className="mdmSectionTitle">Matching fields</div>
-                <div className="mdmPillRow">
-                  {matchingFieldPills.length ? (
-                    matchingFieldPills.map((lbl) => (
-                      <span className="mdmPillSoft" key={String(lbl)}>{String(lbl)}</span>
-                    ))
-                  ) : (
+
+                {matchingFields.length ? (
+                  <div className="mdmBarList">
+                    {matchingFields.map((f) => {
+                      const name = String(f?.label || f?.code || "").trim() || "—";
+
+                      const wRaw = Number(f?.weight);
+                      const weightStr = Number.isFinite(wRaw) ? wRaw.toFixed(2) : "—";
+
+                      let pctNum = Number(f?.weight_pct);
+                      if (!Number.isFinite(pctNum)) {
+                        pctNum = Number.isFinite(wRaw) ? (wRaw * 100.0) : 0;
+                      }
+                      const pct = Math.max(0, Math.min(100, Math.round(pctNum)));
+
+                      return (
+                        <div
+                          className="mdmBarRow"
+                          key={String(f?.code || name)}
+                          style={{
+                            gridTemplateColumns: "minmax(0, max-content) minmax(140px, 1fr) auto",
+                            alignItems: "center",
+                          }}
+                        >
+                          <div
+                            className="mdmBarName"
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              minWidth: 0,
+                            }}
+                          >
+                            <span
+                              style={{
+                                flex: "1 1 auto",
+                                minWidth: 0,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {name}
+                            </span>
+
+                            <span
+                              className="mdmTiny"
+                              style={{
+                                flex: "0 0 auto",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              w: {weightStr}
+                            </span>
+                          </div>
+
+                          <div className="mdmBarTrack" aria-hidden="true">
+                            <span className="mdmBarFill" style={{ width: `${pct}%` }} />
+                          </div>
+
+                          <div className="mdmBarVal">{fmtInt(pct)}%</div>
+                        </div>
+                      );
+
+
+                    })}
+                  </div>
+                ) : (
+                  <div className="mdmPillRow">
                     <span className="mdmPillSoft">—</span>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 <div className="mdmDivider" />
 

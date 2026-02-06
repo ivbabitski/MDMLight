@@ -96,14 +96,11 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
   const [selectedModelId, setSelectedModelId] = useState("");
 
   const userLabel = String(currentUser || getAuthUsername() || "").trim();
-  const COLS = "minmax(160px, 280px) minmax(260px, 1fr) 140px 180px 180px 260px";
+  const COLS = "minmax(160px, 280px) minmax(260px, 1fr) 140px 180px 180px 292.5px";
   const HEAD_BG = "#f6f7f9";
 
 
   function applySort(nextKey) {
-
-
-
     if (sortKey === nextKey) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
       return;
@@ -387,8 +384,6 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
     try {
       window.dispatchEvent(new CustomEvent("mdm:selected_model_changed", { detail: { model_id: id } }));
     } catch {}
-
-    if (onClose) onClose();
   }
 
 
@@ -574,15 +569,13 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                           ? "Running..."
                           : "Run";
 
+                  const isSelected = String(m.id || "") === String(selectedModelId || "");
+
 
                   return (
                     <React.Fragment key={m.id}>
                       <div
-                        className={
-                          String(m.id || "") === String(selectedModelId || "")
-                            ? "mdmTRow mdmTRow--selectable mdmTRow--selected"
-                            : "mdmTRow mdmTRow--selectable"
-                        }
+                        className="mdmTRow"
                         onClick={() => selectModel(m)}
                         style={{
                           gridTemplateColumns: COLS,
@@ -591,9 +584,49 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                         }}
                       >
 
-                        <div title={m.model_name || ""} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {m.model_name || ""}
+                        <div
+                          title={m.model_name || ""}
+                          style={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name="mdm_models_selected"
+                            checked={isSelected}
+                            onChange={() => {}}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              selectModel(m);
+                            }}
+                            aria-label={isSelected ? "Selected model" : "Select model"}
+                            style={{
+                              width: 16,
+                              height: 16,
+                              flex: "0 0 16px",
+                              margin: 0,
+                              accentColor: "#dc2626",
+                              cursor: "pointer",
+                            }}
+                          />
+
+                          <span
+                            style={{
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {m.model_name || ""}
+                          </span>
                         </div>
+
 
                         <div title={m.id || ""} className="mdmMono" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {m.id || ""}
@@ -667,6 +700,8 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
                             {deletingId === m.id ? "Deleting..." : "Delete"}
                           </button>
                         </div>
+
+
                       </div>
 
                       {isJsonOpen ? (
