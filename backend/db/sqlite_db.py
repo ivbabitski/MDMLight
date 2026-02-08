@@ -6,7 +6,9 @@ from typing import Iterator
 DB_PATH = os.environ.get("DB_PATH", "/data/app.db")
 
 def _ensure_db_dir() -> None:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
 
 @contextmanager
 def get_conn() -> Iterator[sqlite3.Connection]:
@@ -126,27 +128,6 @@ def list_mdm_models(include_deleted: bool = False):
         return cur.fetchall()
 
 
-def list_mdm_models(include_deleted: bool = False):
-    init_mdm_models()
-    where = "" if include_deleted else "WHERE deleted_at IS NULL"
-    with get_conn() as conn:
-        cur = conn.execute(
-            f"""
-            SELECT
-                id, model_key, model_name, config_json,
-                owner_user_id, owner_username,
-                app_user_id,
-                created_at, created_by,
-                updated_at, updated_by,
-                deleted_at, deleted_by
-            FROM mdm_models
-            {where}
-            ORDER BY created_at DESC
-            """
-        )
-        return cur.fetchall()
-
-
 def get_mdm_model(model_id_or_key: str, include_deleted: bool = False):
     init_mdm_models()
     filt = "" if include_deleted else "AND deleted_at IS NULL"
@@ -168,6 +149,7 @@ def get_mdm_model(model_id_or_key: str, include_deleted: bool = False):
             (model_id_or_key, model_id_or_key),
         )
         return cur.fetchone()
+
 
 
 def update_mdm_model(model_id: str, model_name, config_json, actor: str, now: str) -> bool:
@@ -203,181 +185,6 @@ def update_mdm_model(model_id: str, model_name, config_json, actor: str, now: st
               AND deleted_at IS NULL
             """,
             tuple(params),
-        )
-        return cur.rowcount > 0
-
-
-def init_mdm_models() -> None:
-    with get_conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS mdm_models (
-                id TEXT PRIMARY KEY,
-                model_key TEXT NOT NULL,
-                model_name TEXT NOT NULL,
-                config_json TEXT NOT NULL,
-
-                owner_user_id INTEGER NOT NULL,
-                owner_username TEXT NOT NULL,
-
-                created_at TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                updated_at TEXT,
-                updated_by TEXT,
-
-                deleted_at TEXT,
-                deleted_by TEXT,
-                app_user_id INTEGER REFERENCES users(id)
-            )
-            """
-        )
-        _ensure_app_user_id(conn, "mdm_models")
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mdm_models_model_name ON mdm_models(model_name)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mdm_models_model_key ON mdm_models(model_key)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mdm_models_deleted_at ON mdm_models(deleted_at)"
-        )
-
-        try:
-            conn.execute(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_mdm_models_active_model_key
-                ON mdm_models(model_key)
-                WHERE deleted_at IS NULL
-                """
-            )
-            conn.execute(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_mdm_models_active_model_name
-                ON mdm_models(model_name)
-                WHERE deleted_at IS NULL
-                """
-            )
-        except sqlite3.OperationalError:
-            pass
-
-
-def create_mdm_model(
-    model_key: str,
-    model_name: str,
-    config_json: str,
-    owner_user_id: int,
-    actor: str,
-    now: str,
-) -> str:
-    init_mdm_models()
-    import uuid
-
-    model_id = str(uuid.uuid4())
-
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            SELECT 1
-            FROM mdm_models
-            WHERE deleted_at IS NULL
-              AND (model_key = ? OR model_name = ?)
-            LIMIT 1
-            """,
-            (model_key, model_name),
-        )
-        if cur.fetchone():
-            raise sqlite3.IntegrityError("active model_key or model_name already exists")
-
-        conn.execute(
-            """
-            INSERT INTO mdm_models (
-                id, model_key, model_name, config_json,
-                owner_user_id, owner_username,
-                created_at, created_by,
-                updated_at, updated_by,
-                deleted_at, deleted_by,
-                app_user_id
-            ) VALUES (
-                ?, ?, ?, ?,
-                ?, ?,
-                ?, ?,
-                NULL, NULL,
-                NULL, NULL,
-                ?
-            )
-            """,
-            (model_id, model_key, model_name, config_json, owner_user_id, actor, now, actor, owner_user_id),
-        )
-
-    return model_id
-
-
-def get_mdm_model_by_id(model_id: str, include_deleted: bool = False):
-    init_mdm_models()
-    filt = "" if include_deleted else "AND deleted_at IS NULL"
-
-    with get_conn() as conn:
-        cur = conn.execute(
-            f"""
-            SELECT
-                id, model_key, model_name, config_json,
-                owner_user_id, owner_username,
-                app_user_id,
-                created_at, created_by,
-                updated_at, updated_by,
-                deleted_at, deleted_by
-            FROM mdm_models
-            WHERE id = ?
-            {filt}
-            LIMIT 1
-            """,
-            (model_id,),
-        )
-        return cur.fetchone()
-
-
-def get_mdm_model_by_name(model_name: str, include_deleted: bool = False):
-    init_mdm_models()
-    filt = "" if include_deleted else "AND deleted_at IS NULL"
-
-    with get_conn() as conn:
-        cur = conn.execute(
-            f"""
-            SELECT
-                id, model_key, model_name, config_json,
-                owner_user_id, owner_username,
-                app_user_id,
-                created_at, created_by,
-                updated_at, updated_by,
-                deleted_at, deleted_by
-            FROM mdm_models
-            WHERE model_name = ?
-            {filt}
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (model_name,),
-        )
-        return cur.fetchone()
-
-
-def soft_delete_mdm_model(model_id: str, actor: str, now: str) -> bool:
-    init_mdm_models()
-
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            UPDATE mdm_models
-            SET
-                deleted_at = ?,
-                deleted_by = ?,
-                updated_at = ?,
-                updated_by = ?
-            WHERE id = ?
-              AND deleted_at IS NULL
-            """,
-            (now, actor, now, actor, model_id),
         )
         return cur.rowcount > 0
 

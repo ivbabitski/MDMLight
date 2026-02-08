@@ -67,7 +67,13 @@ def list_golden_record_records():
     if offset < 0:
         return jsonify({"error": "offset must be >= 0"}), 400
 
-    init_golden_record()
+    try:
+        init_golden_record()
+    except Exception as e:
+        return (
+            jsonify({"error": f"init_golden_record failed: {e.__class__.__name__}: {e}"}),
+            500,
+        )
 
     f_cols = [f"f{str(i).zfill(2)}" for i in range(1, 21)]
     cols = [
@@ -96,9 +102,15 @@ def list_golden_record_records():
         "LIMIT ? OFFSET ?"
     )
 
-    with get_conn() as conn:
-        cur = conn.execute(sql, (app_user_id, model_id, limit, offset))
-        rows = cur.fetchall()
+    try:
+        with get_conn() as conn:
+            cur = conn.execute(sql, (app_user_id, model_id, limit, offset))
+            rows = cur.fetchall()
+    except Exception as e:
+        return (
+            jsonify({"error": f"golden_record query failed: {e.__class__.__name__}: {e}"}),
+            500,
+        )
 
     out: List[Dict[str, Any]] = []
     for r in rows:

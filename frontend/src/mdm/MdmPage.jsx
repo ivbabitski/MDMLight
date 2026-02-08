@@ -474,8 +474,7 @@ export default function MdmPage() {
 
   // NEW (UI only): dashboard + records review
   const [view, setView] = useState("golden"); // golden | match | exceptions
-  const [q, setQ] = useState("");
-  const [masterIdFilter, setMasterIdFilter] = useState("");
+  const [recordSearch, setRecordSearch] = useState("");
   const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(0);
   const [modelOpen, setModelOpen] = useState(false);
@@ -787,28 +786,54 @@ export default function MdmPage() {
 
   const totalClusters = useMemo(() => new Set(rows.map((r) => r.cluster_id)).size, [rows]);
 
+  const rowSearchTextByUiKey = useMemo(() => {
+    const m = new Map();
+
+    for (const r of rows) {
+      const parts = [
+        r.matching_model,
+        r.master_id,
+        r.cluster_id,
+        r.record_id,
+        r.source_name,
+        r.source_id,
+        r.match_threshold,
+        r.survivorship_strategy,
+        ...USER_FIELD_KEYS.map((k) => r[k]),
+        r.created_at,
+        r.created_by,
+        r.updated_at,
+        r.updated_by,
+      ];
+
+      const txt = parts
+        .map((v) => String(v ?? "").trim())
+        .filter(Boolean)
+        .join(" | ")
+        .toLowerCase();
+
+      const key = String(r?.uiKey ?? "");
+      if (key) m.set(key, txt);
+    }
+
+    return m;
+  }, [rows]);
+
   const listRows = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    const master = masterIdFilter.trim().toLowerCase();
+    const needle = recordSearch.trim().toLowerCase();
+    if (!needle) return rows;
 
-    const base = rows;
-
-    const narrowed = master
-      ? base.filter((r) => String(r.master_id || "").toLowerCase().includes(master))
-      : base;
-
-    if (!query) return narrowed;
-
-    return narrowed.filter((r) => {
-      const hay = safeJson(r).toLowerCase();
-      return hay.includes(query);
+    return rows.filter((r) => {
+      const key = String(r?.uiKey ?? "");
+      const hay = key ? (rowSearchTextByUiKey.get(key) || "") : "";
+      return hay.includes(needle);
     });
-  }, [masterIdFilter, q, rows]);
+  }, [recordSearch, rowSearchTextByUiKey, rows]);
 
 
   useEffect(() => {
     setPage(0);
-  }, [masterIdFilter, q, view, pageSize]);
+  }, [recordSearch, view, pageSize]);
 
   const pageCount = useMemo(() => {
     const total = listRows.length;
@@ -851,7 +876,7 @@ export default function MdmPage() {
     model_id: selectedModelId,
     view,
     visible_exception_rows: listRows.length,
-    master_id_filter: masterIdFilter,
+    record_search: recordSearch,
   });
 }
 
@@ -1738,19 +1763,19 @@ export default function MdmPage() {
                 <input
                   className="mdmInput mdmInput--withIcon"
                   type="text"
-                  value={masterIdFilter}
-                  onChange={(e) => setMasterIdFilter(e.target.value)}
-                  placeholder="Filter master_id"
-                  aria-label="Filter by master_id"
+                  value={recordSearch}
+                  onChange={(e) => setRecordSearch(e.target.value)}
+                  placeholder="Search records"
+                  aria-label="Search records"
                 />
 
-                {masterIdFilter ? (
+                {recordSearch ? (
                   <button
                     type="button"
                     className="mdmInputIconBtn"
-                    onClick={() => setMasterIdFilter("")}
-                    title="Clear master_id filter"
-                    aria-label="Clear master_id filter"
+                    onClick={() => setRecordSearch("")}
+                    title="Clear search"
+                    aria-label="Clear search"
                   >
                     ✕
                   </button>
@@ -1762,7 +1787,7 @@ export default function MdmPage() {
                   <button
                     type="button"
                     className={view === "golden" ? "isActive" : ""}
-                    onClick={() => { setView("golden"); setQ(""); }}
+                    onClick={() => { setView("golden"); }}
                     role="tab"
                     aria-selected={view === "golden"}
                   >
@@ -1771,7 +1796,7 @@ export default function MdmPage() {
                   <button
                     type="button"
                     className={view === "match" ? "isActive" : ""}
-                    onClick={() => { setView("match"); setQ(""); }}
+                    onClick={() => { setView("match"); }}
                     role="tab"
                     aria-selected={view === "match"}
                   >
@@ -1780,7 +1805,7 @@ export default function MdmPage() {
                   <button
                     type="button"
                     className={view === "exceptions" ? "isActive" : ""}
-                    onClick={() => { setView("exceptions"); setQ(""); }}
+                    onClick={() => { setView("exceptions"); }}
                     role="tab"
                     aria-selected={view === "exceptions"}
                   >

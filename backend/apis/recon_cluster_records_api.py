@@ -83,6 +83,7 @@ def list_recon_cluster_records():
             500,
         )
 
+    # Keep the column list identical to /api/recon-cluster/cluster-records so the UI can reuse the same table.
     f_cols = [f"f{str(i).zfill(2)}" for i in range(1, 21)]
     cols = [
         "rowid AS id",
@@ -102,26 +103,24 @@ def list_recon_cluster_records():
         *f_cols,
     ]
 
-    where_parts = ["app_user_id = ?", "model_id = ?"]
+    where_clauses: List[str] = [
+        "app_user_id = ?",
+        "model_id = ?",
+    ]
     params: List[Any] = [app_user_id, model_id]
 
-
-    # "match" = full recon_cluster (no match_status filtering).
-    # "exceptions" = only rows flagged as exceptions.
-    if status_mode == "exceptions":
-        where_parts.append("lower(coalesce(match_status, 'match')) <> 'match'")
-
-    where_sql = " AND ".join(where_parts)
-
+    if status_mode == "match":
+        where_clauses.append("LOWER(COALESCE(match_status, '')) = 'match'")
+    else:
+        where_clauses.append("LOWER(COALESCE(match_status, '')) <> 'match'")
 
     sql = (
         f"SELECT {', '.join(cols)} "
         "FROM recon_cluster "
-        f"WHERE {where_sql} "
-        "ORDER BY cluster_id ASC, (match_score IS NULL) ASC, match_score DESC, id ASC "
+        f"WHERE {' AND '.join(where_clauses)} "
+        "ORDER BY (match_score IS NULL) ASC, match_score DESC, id ASC "
         "LIMIT ? OFFSET ?"
     )
-
     params.extend([limit, offset])
 
     try:
