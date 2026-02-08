@@ -48,16 +48,46 @@ def cleanup_recon_cluster():
         return err
 
     with get_conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM recon_cluster WHERE app_user_id = ? AND model_id = ?",
-            (app_user_id, model_id),
-        )
+        model_row = conn.execute(
+            "SELECT model_name FROM mdm_models WHERE id = ? AND app_user_id = ? AND deleted_at IS NULL LIMIT 1",
+            (model_id, app_user_id),
+        ).fetchone()
+        model_name = str(model_row["model_name"] or "").strip() if model_row else ""
+
+        if model_name:
+            cur = conn.execute(
+                "DELETE FROM recon_cluster WHERE app_user_id = ? AND (model_id = ? OR model_name = ?)",
+                (app_user_id, model_id, model_name),
+            )
+        else:
+            cur = conn.execute(
+                "DELETE FROM recon_cluster WHERE app_user_id = ? AND model_id = ?",
+                (app_user_id, model_id),
+            )
         deleted = cur.rowcount
 
-        remaining_row = conn.execute(
-            "SELECT COUNT(1) AS n FROM recon_cluster WHERE app_user_id = ? AND model_id = ?",
+        cur_cm = conn.execute(
+            "DELETE FROM cluster_map WHERE app_user_id = ? AND model_id = ?",
             (app_user_id, model_id),
-        ).fetchone()
+        )
+        cluster_map_deleted = cur_cm.rowcount
+
+        cur_me = conn.execute(
+            "DELETE FROM match_exception WHERE app_user_id = ? AND model_id = ?",
+            (app_user_id, model_id),
+        )
+        match_exception_deleted = cur_me.rowcount
+
+        if model_name:
+            remaining_row = conn.execute(
+                "SELECT COUNT(1) AS n FROM recon_cluster WHERE app_user_id = ? AND (model_id = ? OR model_name = ?)",
+                (app_user_id, model_id, model_name),
+            ).fetchone()
+        else:
+            remaining_row = conn.execute(
+                "SELECT COUNT(1) AS n FROM recon_cluster WHERE app_user_id = ? AND model_id = ?",
+                (app_user_id, model_id),
+            ).fetchone()
         remaining = int(remaining_row["n"] or 0) if remaining_row else 0
 
     return jsonify(
@@ -66,7 +96,10 @@ def cleanup_recon_cluster():
             "table": "recon_cluster",
             "app_user_id": app_user_id,
             "model_id": model_id,
+            "model_name": model_name,
             "deleted": deleted,
             "remaining": remaining,
+            "cluster_map_deleted": cluster_map_deleted,
+            "match_exception_deleted": match_exception_deleted,
         }
     )

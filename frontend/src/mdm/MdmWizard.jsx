@@ -287,9 +287,62 @@ function PriorityPickerList({
 export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl = "", onSaved }) {
   const fileRef = useRef(null);
 
-  // reset to step 1 whenever it opens (keeps config/state)
+  // reset wizard state whenever it opens (Start Setup should be blank)
   useEffect(() => {
-    if (open) setStep(0);
+    if (!open) return;
+
+    setStep(0);
+    setConfigured(false);
+
+    setAiExceptions(false);
+
+    setDomainModelName("");
+    setEditingModelId(null);
+
+    setSourceType("csv");
+    setCsvFileName("");
+    setCsvFile(null);
+    setCsvUploading(false);
+    setCsvUploaded(false);
+    setCsvUploadError("");
+    setCsvUploadRows(0);
+    setRecordCount(12500);
+
+    setApiEndpoint("http://localhost:5000/api/ingest");
+    setApiToken(randomToken(16));
+    setCopied(null);
+    setShowToken(false);
+
+    setSavingModel(false);
+    setSaveError("");
+    setSaveSuccess(null);
+
+    setFields(DEFAULT_FIELDS.map((f) => ({ ...f, id: uid("f") })));
+
+    setMatchFieldCodes([]);
+    setMatchFieldPick("");
+    setRunModelAfterSave(false);
+    setWeightDraftById({});
+
+    setMatchThreshold(0.85);
+    setPossibleThreshold(0.7);
+
+    setAdvanced(false);
+    setGlobalRule("recency_updated_date");
+
+    setSourceSystemsLoading(false);
+    setSourceSystemsError("");
+    setSourceSystemOptions([]);
+
+    setSystemPriority([""]);
+    setUserPriority([""]);
+
+    setSpecificValuePriority([{ id: uid("sv"), fieldCode: "", value: "" }]);
+    setSpecificValueError("");
+
+    try {
+      if (fileRef.current) fileRef.current.value = "";
+    } catch {}
   }, [open]);
 
 
@@ -354,6 +407,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
   const [matchFieldPick, setMatchFieldPick] = useState("");
 
   const [runModelAfterSave, setRunModelAfterSave] = useState(false);
+  const [weightDraftById, setWeightDraftById] = useState(() => ({}));
 
   // Step 3 — model
   const [matchThreshold, setMatchThreshold] = useState(0.85);
@@ -370,6 +424,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
   const [systemPriority, setSystemPriority] = useState([""]);
   const [userPriority, setUserPriority] = useState([""]);
+
 
 
   const [specificValuePriority, setSpecificValuePriority] = useState(() => [
@@ -426,6 +481,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
   // auto equalize weights when match fields selection changes
   useEffect(() => {
+    setWeightDraftById({});
     const ids = matchFields.map((f) => f.id);
     const n = ids.length;
     if (n === 0) return;
@@ -454,6 +510,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
       });
     });
   }, [matchFieldKey]);
+
 
   // keep matchFieldCodes valid (must remain: flex + included + labeled)
   useEffect(() => {
@@ -1251,6 +1308,7 @@ useEffect(() => {
       }
     }
 
+    const wasUpdate = Boolean(editingModelId);
     const saved = await saveMdmModelToApi();
     if (!saved) return;
 
@@ -1267,7 +1325,7 @@ useEffect(() => {
     }
 
     setConfigured(true);
-    setSaveSuccess({ name: createdName, id: createdId });
+    setSaveSuccess({ name: createdName, id: createdId, action: wasUpdate ? "updated" : "created" });
 
   }
 
@@ -2184,6 +2242,8 @@ useEffect(() => {
                             Math.min(100, Math.round((Number(f.weight) || 0) * 100))
                           );
 
+                          const weightDraft = weightDraftById[f.id];
+
                           const maxWeightPct = matchFields.length > 1 ? (100 - (matchFields.length - 1)) : 100;
 
                           return (
@@ -2217,12 +2277,31 @@ useEffect(() => {
                                   type="number"
                                   min={1}
                                   max={maxWeightPct}
-                                  value={weightPct}
+                                  value={weightDraft !== undefined ? weightDraft : weightPct}
                                   disabled={matchFields.length === 1}
                                   onChange={(e) => {
-                                    const v = Number(e.target.value);
+                                    setWeightDraftById((prev) => ({ ...prev, [f.id]: e.target.value }));
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") e.currentTarget.blur();
+                                  }}
+                                  onBlur={(e) => {
+                                    const raw = String(e.target.value ?? "").trim();
+
+                                    setWeightDraftById((prev) => {
+                                      if (!Object.prototype.hasOwnProperty.call(prev, f.id)) return prev;
+                                      const next = { ...prev };
+                                      delete next[f.id];
+                                      return next;
+                                    });
+
+                                    if (!raw) return;
+
+                                    const v = Number(raw);
                                     if (Number.isNaN(v)) return;
+
                                     const clamped = Math.max(1, Math.min(maxWeightPct, v));
+                                    if (clamped === weightPct) return;
                                     setWeightPct(f.id, clamped);
                                   }}
                                 />
@@ -2377,7 +2456,7 @@ useEffect(() => {
 
             <div style={{ padding: 14 }}>
               <div style={{ marginBottom: 14, lineHeight: 1.35 }}>
-                ✅ Model created: <span className="mdmMono">{saveSuccess.name}</span>
+                ✅ Your model was {saveSuccess.action}: <span className="mdmMono">{saveSuccess.name}</span>
                 {saveSuccess.id != null && String(saveSuccess.id).trim() !== "" ? (
                   <>
                     {" "}

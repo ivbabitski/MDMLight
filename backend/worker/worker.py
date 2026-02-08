@@ -29,10 +29,7 @@ MATCH_WORKERS_TOTAL = int(os.environ.get("MATCH_WORKERS", str(os.cpu_count() or 
 CANDIDATE_MIN = 250
 CANDIDATE_MAX = 500
 
-# Backward-compatible env var (no longer used for candidate selection range).
-MATCH_CANDIDATE_TARGET = int(os.environ.get("MATCH_CANDIDATE_TARGET", "500"))
 MATCH_BLOCK_MAX_PREFIX_LEN = int(os.environ.get("MATCH_BLOCK_MAX_PREFIX_LEN", "10"))
-
 
 
 def _utc_now_iso() -> str:
@@ -93,12 +90,6 @@ def _is_f_code(code: Any) -> bool:
     n = int(c[1:])
     return 1 <= n <= 20
 
-
-def _field_index(fname: str) -> int:
-    # "f01" -> 0
-    if not _is_f_code(fname):
-        raise ValueError(f"invalid field name: {fname}")
-    return int(fname[1:]) - 1
 
 
 # ----------------------------
@@ -161,7 +152,7 @@ def _claim_queued_jobs(limit: int) -> List[Dict[str, Any]]:
         # queued jobs in order
         rows = conn.execute(
             """
-            SELECT job_id, app_user_id, model_id, model_json
+            SELECT job_id, app_user_id, model_id
             FROM match_job
             WHERE status='queued'
             ORDER BY created_at ASC
@@ -185,7 +176,6 @@ def _claim_queued_jobs(limit: int) -> List[Dict[str, Any]]:
                     "job_id": r["job_id"],
                     "app_user_id": app_user_id,
                     "model_id": model_id,
-                    "model_json": r["model_json"],
                 }
             )
             running_pairs.add(pair)
@@ -425,7 +415,6 @@ def _build_cfg(model: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "selected_fields": sel,
-        "selected_indices": [_field_index(f) for f in sel],
         "weights": weights,
         "thresholds": thresholds,
         "model_T": model_T,
@@ -434,14 +423,6 @@ def _build_cfg(model: Dict[str, Any]) -> Dict[str, Any]:
         "blocking_fields": block_fields[:2],
         "blocking_passes": passes,
     }
-
-
-def _load_recon_cluster_rows(app_user_id: int, model_id: str) -> List[Tuple]:
-    cols = ["source_id", "source_name"] + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
-    sql = f"SELECT {', '.join(cols)} FROM recon_cluster WHERE app_user_id=? AND model_id=?"
-    with get_conn() as conn:
-        rows = conn.execute(sql, (app_user_id, model_id)).fetchall()
-        return [tuple(r) for r in rows]
 
 
 def _load_unprocessed_source_input_rows(app_user_id: int, model_id: str) -> List[sqlite3.Row]:
@@ -849,131 +830,6 @@ def _adaptive_candidates_batch(
     return []
 
 
-def _seed_recon_cluster_from_source_input(app_user_id: int, model_id: str, model_name: str) -> int:
-    src_cols = (
-        ["source_name", "source_id"]
-        + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
-        + ["created_at", "created_by", "updated_at", "updated_by"]
-    )
-
-    now = _utc_now_iso()
-
-    with get_conn() as conn:
-        # Compatibility: some DBs have recon_cluster.cluster_size defined as NOT NULL.
-        # If present, we must supply it on INSERT.
-        recon_cols = conn.execute("PRAGMA table_info(recon_cluster)").fetchall()
-        recon_has_cluster_size = any(str(r["name"]) == "cluster_size" for r in recon_cols)
-
-        insert_cols = (
-            ["cluster_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
-            + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
-            + ["created_at", "created_by", "updated_at", "updated_by", "match_status"]
-        )
-
-        if recon_has_cluster_size:
-            insert_cols = list(insert_cols)
-            insert_cols.insert(1, "cluster_size")
-
-        placeholders = ", ".join(["?"] * len(insert_cols))
-
-        rows = conn.execute(
-            f"SELECT {', '.join(src_cols)} FROM source_input WHERE app_user_id=?",
-            (app_user_id,),
-        ).fetchall()
-
-        if not rows:
-            return 0
-
-        to_insert: List[Tuple[Any, ...]] = []
-        map_rows: List[Tuple[Any, ...]] = []
-
-        for r in rows:
-            cid = str(uuid.uuid4())
-
-            vals: List[Any] = [
-                cid,
-                model_id,
-                model_name,
-                r["source_name"],
-                r["source_id"],
-                app_user_id,
-            ]
-
-            for i in range(1, 21):
-                vals.append(r[f"f{str(i).zfill(2)}"])
-
-            vals.append(r["created_at"])
-            vals.append(r["created_by"])
-            vals.append(r["updated_at"])
-            vals.append(r["updated_by"])
-            vals.append("no_match")
-
-            if recon_has_cluster_size:
-                vals.insert(1, 1)
-
-            to_insert.append(tuple(vals))
-
-            map_rows.append(
-                (
-                    app_user_id,
-                    model_id,
-                    r["source_name"],
-                    r["source_id"],
-                    cid,
-                    now,
-                    now,
-                )
-            )
-
-        conn.executemany(
-            f"INSERT INTO recon_cluster ({', '.join(insert_cols)}) VALUES ({placeholders})",
-            to_insert,
-        )
-
-        conn.executemany(
-            """
-            INSERT INTO cluster_map (
-              app_user_id, model_id,
-              source_name, source_id,
-              cluster_id,
-              first_seen_at, last_seen_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(app_user_id, model_id, source_name, source_id) DO UPDATE SET
-              cluster_id = excluded.cluster_id,
-              last_seen_at = excluded.last_seen_at
-            """,
-            map_rows,
-        )
-
-        return len(to_insert)
-
-
-
-def _step1_recon_cluster_sync(app_user_id: int, model_id: str) -> Tuple[int, int]:
-    """
-    Ensures recon_cluster is not empty for this (app_user_id, model_id).
-
-    - If recon_cluster already has rows: do nothing.
-    - If empty: bootstrap recon_cluster from source_input (each record becomes its own cluster).
-    """
-    with get_conn() as conn:
-        has_any = (
-            conn.execute(
-                "SELECT 1 FROM recon_cluster WHERE app_user_id=? AND model_id=? LIMIT 1",
-                (app_user_id, model_id),
-            ).fetchone()
-            is not None
-        )
-
-    inserted = 0
-    if not has_any:
-        model_name = _load_model_name_from_mdm_models(model_id)
-        inserted = _seed_recon_cluster_from_source_input(app_user_id, model_id, model_name)
-
-    rows = _load_recon_cluster_rows(app_user_id, model_id)
-    return len(rows), inserted
-
 def run_one_job(job_id: str, match_workers: int) -> None:
     # Load job row
     with get_conn() as conn:
@@ -1061,6 +917,9 @@ def run_one_job(job_id: str, match_workers: int) -> None:
     model_name = _load_model_name_from_mdm_models(model_id)
     now = _utc_now_iso()
 
+    match_threshold = float(cfg["model_T"])
+    exceptions_threshold = float(cfg["possible_T"])
+
     # Compatibility: some DBs have recon_cluster.cluster_size defined as NOT NULL.
     # If present, we must supply it on INSERT.
     with get_conn() as conn:
@@ -1070,7 +929,7 @@ def run_one_job(job_id: str, match_workers: int) -> None:
     recon_cols = (
         ["cluster_id", "job_id", "record_id", "model_id", "model_name", "source_name", "source_id", "app_user_id"]
         + [f"f{str(i).zfill(2)}" for i in range(1, 21)]
-        + ["created_at", "created_by", "updated_at", "updated_by", "match_status", "match_score"]
+        + ["created_at", "created_by", "updated_at", "updated_by", "match_status", "match_score", "match_threshold", "exceptions_threshold"]
     )
 
     if recon_has_cluster_size:
@@ -1080,6 +939,7 @@ def run_one_job(job_id: str, match_workers: int) -> None:
     recon_inserts: List[Tuple[Any, ...]] = []
     map_rows: List[Tuple[Any, ...]] = []
     exc_rows: List[Tuple[Any, ...]] = []
+
 
 
     match_count = 0
@@ -1258,6 +1118,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 vals.append(r["updated_by"])
                 vals.append(match_statuses[i])
                 vals.append(float(match_scores[i]))
+                vals.append(float(match_threshold))
+                vals.append(float(exceptions_threshold))
 
                 recon_inserts.append(tuple(vals))
 
@@ -1274,11 +1136,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 )
 
 
-            total_clusters = len(set([c for c in assigned_cluster if c is not None]))
-
         else:
             # Mode B: Incremental run — match only NEW source_input rows into existing clusters
-            total_clusters = 0
 
             recon_scope_total = int(
                 conn.execute(
@@ -1412,6 +1271,8 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 vals.append(r["updated_by"])
                 vals.append(match_status)
                 vals.append(float(match_score))
+                vals.append(float(match_threshold))
+                vals.append(float(exceptions_threshold))
 
                 recon_inserts.append(tuple(vals))
 
@@ -1453,8 +1314,6 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                             app_user_id,
                         )
                     )
-
-            total_clusters = new_cluster_count
 
 
         if recon_inserts:
@@ -1519,6 +1378,13 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 """,
                 exc_rows,
             )
+
+        total_clusters = int(
+            conn.execute(
+                "SELECT COUNT(DISTINCT cluster_id) AS n FROM recon_cluster WHERE app_user_id=? AND model_id=?",
+                (app_user_id, model_id),
+            ).fetchone()["n"]
+        )
 
     try:
         run_survivorship(job_id=job_id, app_user_id=int(app_user_id), model=surv_model, actor="match_worker")

@@ -746,6 +746,8 @@ def init_recon_cluster():
 
                 match_status TEXT DEFAULT 'match',
                 match_score REAL,
+                match_threshold REAL,
+                exceptions_threshold REAL,
                 app_user_id INTEGER REFERENCES users(id)
             )
             """
@@ -815,6 +817,8 @@ def init_recon_cluster():
         _ensure_column(conn, "recon_cluster", "updated_by", "updated_by TEXT")
         _ensure_column(conn, "recon_cluster", "match_status", "match_status TEXT DEFAULT 'match'")
         _ensure_column(conn, "recon_cluster", "match_score", "match_score REAL")
+        _ensure_column(conn, "recon_cluster", "match_threshold", "match_threshold REAL")
+        _ensure_column(conn, "recon_cluster", "exceptions_threshold", "exceptions_threshold REAL")
         for i in range(1, 21):
             c = f"f{str(i).zfill(2)}"
             _ensure_column(conn, "recon_cluster", c, f"{c} TEXT")
@@ -1030,6 +1034,73 @@ def init_match_exception() -> None:
 
 
 
+def init_api_key() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS api_key (
+              api_key_id TEXT PRIMARY KEY,
+
+              app_user_id INTEGER NOT NULL REFERENCES users(id),
+              model_id TEXT NOT NULL REFERENCES mdm_models(id),
+
+              name TEXT,
+
+              token_prefix TEXT NOT NULL,
+              token_hash TEXT NOT NULL,
+
+              status TEXT NOT NULL DEFAULT 'active',  -- active | revoked
+
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              last_used_at TEXT,
+              revoked_at TEXT
+            )
+            """
+        )
+
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_api_key_token_hash ON api_key(token_hash)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_api_key_user_model ON api_key(app_user_id, model_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_api_key_model_id ON api_key(model_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_api_key_status ON api_key(status)")
+
+
+def init_api_batch() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS api_batch (
+              batch_id TEXT PRIMARY KEY,
+
+              api_key_id TEXT NOT NULL REFERENCES api_key(api_key_id),
+              idempotency_key TEXT NOT NULL,
+
+              status TEXT NOT NULL,          -- received | queued | running | completed | failed
+
+              job_id TEXT REFERENCES match_job(job_id),
+
+              request_meta_json TEXT,
+              log_json TEXT,
+              error_message TEXT,
+
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              started_at TEXT,
+              finished_at TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_api_batch_idempotency ON api_batch(api_key_id, idempotency_key)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_api_batch_status ON api_batch(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_api_batch_key_created_at ON api_batch(api_key_id, created_at)"
+        )
+
+
 def init_all_tables() -> None:
     # existing
     init_users()
@@ -1042,6 +1113,10 @@ def init_all_tables() -> None:
     init_cluster_map()
     init_golden_record()
     init_match_exception()
+
+    # api
+    init_api_key()
+    init_api_batch()
 
 
 

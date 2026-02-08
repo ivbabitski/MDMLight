@@ -133,6 +133,41 @@ function safeJsonFromStringMaybe(v) {
 }
 
 
+async function fetchJsonWithUserId(url, { userId, method, headers, body } = {}, contextLabel) {
+  const uid = String(userId || "").trim();
+
+  const finalHeaders = {
+    Accept: "application/json",
+    ...(headers && typeof headers === "object" ? headers : {}),
+  };
+
+  if (uid) finalHeaders["X-User-Id"] = uid;
+
+  const res = await fetch(String(url || ""), {
+    method: method || "GET",
+    cache: "no-store",
+    headers: finalHeaders,
+    body,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`${String(contextLabel || "request")} failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
+  }
+
+  const ct = String(res.headers.get("content-type") || "");
+  if (!ct.toLowerCase().includes("application/json")) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(
+      `${String(contextLabel || "request")} expected JSON but got "${ct || "unknown"}". ` +
+        `URL="${String(url || "")}". First bytes: ${txt.slice(0, 120)}`
+    );
+  }
+
+  return res.json();
+}
+
+
 async function fetchSourceInputSummary(appUserId, modelId) {
   const base = String(API_BASE || "").trim();
   const mid = String(modelId || "").trim();
@@ -140,32 +175,7 @@ async function fetchSourceInputSummary(appUserId, modelId) {
 
   const userId = String(appUserId || "").trim();
 
-  const headers = {
-    Accept: "application/json",
-  };
-  if (userId) headers["X-User-Id"] = userId;
-
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers,
-  });
-
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`source-input summary failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
-  }
-
-  const ct = String(res.headers.get("content-type") || "");
-  if (!ct.toLowerCase().includes("application/json")) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `source-input summary expected JSON but got "${ct || "unknown"}". ` +
-        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
-    );
-  }
-
-  return res.json();
+  return fetchJsonWithUserId(url, { userId }, "source-input summary");
 }
 
 
@@ -176,31 +186,7 @@ async function fetchMatchingSummary(appUserId, modelId) {
 
   const userId = String(appUserId || "").trim();
 
-  const headers = {
-    Accept: "application/json",
-  };
-  if (userId) headers["X-User-Id"] = userId;
-
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers,
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`matching summary failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
-  }
-
-  const ct = String(res.headers.get("content-type") || "");
-  if (!ct.toLowerCase().includes("application/json")) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `matching summary expected JSON but got "${ct || "unknown"}". ` +
-        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
-    );
-  }
-
-  return res.json();
+  return fetchJsonWithUserId(url, { userId }, "matching summary");
 }
 
 
@@ -215,31 +201,23 @@ async function fetchReconClusterRecords(appUserId, modelId, status) {
 
   const userId = String(appUserId || "").trim();
 
-  const headers = {
-    Accept: "application/json",
-  };
-  if (userId) headers["X-User-Id"] = userId;
+  return fetchJsonWithUserId(url, { userId }, "recon-cluster records");
+}
 
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers,
-  });
 
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`recon-cluster records failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
-  }
+async function fetchReconClusterClusterRecords(appUserId, modelId, clusterId) {
+  const base = String(API_BASE || "").trim();
+  const mid = String(modelId || "").trim();
+  const cid = String(clusterId || "").trim();
 
-  const ct = String(res.headers.get("content-type") || "");
-  if (!ct.toLowerCase().includes("application/json")) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `recon-cluster records expected JSON but got "${ct || "unknown"}". ` +
-        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
-    );
-  }
+  const url =
+    `${base}/api/recon-cluster/cluster-records?model_id=${encodeURIComponent(mid)}` +
+    `&cluster_id=${encodeURIComponent(cid)}` +
+    `&t=${Date.now()}`;
 
-  return res.json();
+  const userId = String(appUserId || "").trim();
+
+  return fetchJsonWithUserId(url, { userId }, "recon-cluster cluster-records");
 }
 
 
@@ -250,31 +228,7 @@ async function fetchGoldenRecordRecords(appUserId, modelId) {
 
   const userId = String(appUserId || "").trim();
 
-  const headers = {
-    Accept: "application/json",
-  };
-  if (userId) headers["X-User-Id"] = userId;
-
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers,
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`golden-record records failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
-  }
-
-  const ct = String(res.headers.get("content-type") || "");
-  if (!ct.toLowerCase().includes("application/json")) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `golden-record records expected JSON but got "${ct || "unknown"}". ` +
-        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
-    );
-  }
-
-  return res.json();
+  return fetchJsonWithUserId(url, { userId }, "golden-record records");
 }
 
 
@@ -285,34 +239,16 @@ async function cleanupReconCluster(appUserId, modelId) {
 
   const userId = String(appUserId || "").trim();
 
-  const headers = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-  };
-  if (userId) headers["X-User-Id"] = userId;
-
-  const res = await fetch(url, {
-    method: "DELETE",
-    cache: "no-store",
-    headers,
-    body: JSON.stringify({ model_id: mid }),
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`cleanup recon-cluster failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
-  }
-
-  const ct = String(res.headers.get("content-type") || "");
-  if (!ct.toLowerCase().includes("application/json")) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `cleanup recon-cluster expected JSON but got "${ct || "unknown"}". ` +
-        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
-    );
-  }
-
-  return res.json();
+  return fetchJsonWithUserId(
+    url,
+    {
+      userId,
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: mid }),
+    },
+    "cleanup recon-cluster"
+  );
 }
 
 
@@ -323,34 +259,16 @@ async function cleanupGoldenRecord(appUserId, modelId) {
 
   const userId = String(appUserId || "").trim();
 
-  const headers = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-  };
-  if (userId) headers["X-User-Id"] = userId;
-
-  const res = await fetch(url, {
-    method: "DELETE",
-    cache: "no-store",
-    headers,
-    body: JSON.stringify({ model_id: mid }),
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`cleanup golden-record failed (HTTP ${res.status}). ${txt.slice(0, 120)}`);
-  }
-
-  const ct = String(res.headers.get("content-type") || "");
-  if (!ct.toLowerCase().includes("application/json")) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `cleanup golden-record expected JSON but got "${ct || "unknown"}". ` +
-        `URL="${url}". First bytes: ${txt.slice(0, 120)}`
-    );
-  }
-
-  return res.json();
+  return fetchJsonWithUserId(
+    url,
+    {
+      userId,
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: mid }),
+    },
+    "cleanup golden-record"
+  );
 }
 
 
@@ -474,6 +392,8 @@ export default function MdmPage() {
 
 
   useEffect(() => {
+    if (!accountMenuOpen) return;
+
     function onMouseDown(e) {
       if (!accountMenuOpen) return;
       if (accountMenuRef.current && !accountMenuRef.current.contains(e.target)) {
@@ -495,7 +415,10 @@ export default function MdmPage() {
   }, [accountMenuOpen]);
 
 
+
   useEffect(() => {
+    if (!matchActionsOpen) return;
+
     function onMouseDown(e) {
       if (!matchActionsOpen) return;
       if (matchActionsRef.current && !matchActionsRef.current.contains(e.target)) {
@@ -565,9 +488,20 @@ export default function MdmPage() {
   const [recordsErr, setRecordsErr] = useState("");
   const [recordsBusy, setRecordsBusy] = useState(false);
 
-  const [promoted, setPromoted] = useState({}); // uiKey -> boolean (exceptions view)
+  const [activeClusterId, setActiveClusterId] = useState(""); // "" => exceptions list, non-empty => cluster opened
+
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [reassignRow, setReassignRow] = useState(null);
+  const [reassignToClusterId, setReassignToClusterId] = useState("");
+  const [reassignErr, setReassignErr] = useState("");
+
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectRow, setRejectRow] = useState(null);
+  const [rejectMode, setRejectMode] = useState("");
+  const [rejectErr, setRejectErr] = useState("");
 
   const job = MOCK_JOB;
+
 
 
   function normalizeUiFieldsFromDbRow(row) {
@@ -658,12 +592,11 @@ export default function MdmPage() {
       return;
     }
 
-    if (modelId !== String(selectedModelId || "").trim()) {
-      setSelectedModelId(modelId);
-    }
+    setSelectedModelId(modelId);
 
     setRecordsBusy(true);
     setRecordsErr("");
+    setActiveClusterId("");
 
     try {
       if (view === "golden") {
@@ -682,15 +615,79 @@ export default function MdmPage() {
     } finally {
       setRecordsBusy(false);
     }
-  }, [currentUserId, selectedModelId, view]);
+  }, [currentUserId, view]);
+
+
+  async function openClusterById(clusterId) {
+    if (view !== "exceptions") return;
+
+    const cid = String(clusterId || "").trim();
+    if (!cid) return;
+
+    const userId = String(currentUserId || "").trim();
+    if (!userId) {
+      setRecordsErr("X-User-Id is required (login)");
+      return;
+    }
+
+    let modelId = "";
+    try {
+      modelId = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+    } catch {}
+
+    if (!modelId) {
+      setRecordsErr("model_id is required (select a model)");
+      return;
+    }
+
+    if (modelId !== String(selectedModelId || "").trim()) {
+      setSelectedModelId(modelId);
+    }
+
+    setRecordsBusy(true);
+    setRecordsErr("");
+    setActiveClusterId(cid);
+
+    try {
+      const data = await fetchReconClusterClusterRecords(userId, modelId, cid);
+      const recs = Array.isArray(data?.records) ? data.records : [];
+      setRecords(recs.map(toReconUiRow));
+    } catch (e) {
+      setRecords([]);
+      setRecordsErr(String(e?.message || e));
+    } finally {
+      setRecordsBusy(false);
+    }
+  }
 
 
   useEffect(() => {
     refreshRecords();
   }, [refreshRecords]);
 
+  useEffect(() => {
+    function onRunFinished(e) {
+      const mid = String(e?.detail?.model_id || "").trim();
+      if (!mid) return;
+
+      let selected = "";
+      try {
+        selected = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+      } catch {}
+
+      if (selected && mid !== selected) return;
+
+      refreshMatchingSummary();
+      refreshRecords();
+    }
+
+    window.addEventListener("mdm:model_run_finished", onRunFinished);
+    return () => window.removeEventListener("mdm:model_run_finished", onRunFinished);
+  }, [refreshMatchingSummary, refreshRecords]);
+
 
   const totalSourceRecords = useMemo(() => Number(sourceSummary?.total_records || 0), [sourceSummary]);
+
 
   const fieldsWithData = useMemo(() => Number(sourceSummary?.fields_with_data || 0), [sourceSummary]);
 
@@ -803,18 +800,7 @@ export default function MdmPage() {
     if (!query) return narrowed;
 
     return narrowed.filter((r) => {
-      const hay = [
-        r.matching_model,
-        r.master_id,
-        String(r.match_threshold),
-        r.survivorship_strategy,
-        ...USER_FIELD_KEYS.map((k) => r[k]),
-        r.created_at,
-        r.created_by,
-        r.updated_at,
-        r.updated_by,
-      ].filter(Boolean).join(" | ").toLowerCase();
-
+      const hay = safeJson(r).toLowerCase();
       return hay.includes(query);
     });
   }, [masterIdFilter, q, rows]);
@@ -848,6 +834,7 @@ export default function MdmPage() {
     return Math.min(listRows.length, (page + 1) * pageSize);
   }, [listRows.length, page, pageSize]);
 
+  const showActionsColumn = view === "exceptions" && !!String(activeClusterId || "").trim();
 
   function csvEscapeCell(v) {
     const s = String(v ?? "");
@@ -855,6 +842,19 @@ export default function MdmPage() {
     const escaped = s.replace(/"/g, '""');
     return needsQuotes ? `"${escaped}"` : escaped;
   }
+
+
+
+  function runAiSteward() {
+  // TODO: replace with real GPT-agent call to resolve exceptions
+  console.log("[MDM ACTION] ai_steward_resolve_exceptions", {
+    model_id: selectedModelId,
+    view,
+    visible_exception_rows: listRows.length,
+    master_id_filter: masterIdFilter,
+  });
+}
+
 
   function downloadCsv() {
     const cols = [
@@ -894,17 +894,101 @@ export default function MdmPage() {
     setJsonPopupOpen(true);
   }
 
+  function openJobLogs() {
+    const modelId = String(selectedModelId || "—");
+    const payload =
+      (matchingSummary && typeof matchingSummary === "object" && (
+        matchingSummary.job_logs ||
+        matchingSummary.logs ||
+        matchingSummary.job_log ||
+        null
+      )) || {
+        message: "Job logs are not available yet (UI only). Wire this to a backend endpoint when ready.",
+        model_id: modelId,
+      };
+
+    openJsonPopup(`Job logs (model_id: ${modelId})`, payload);
+  }
 
 
-  function togglePromote(row) {
-    setPromoted((prev) => ({ ...prev, [row.uiKey]: !prev[row.uiKey] }));
-    console.log("[MDM ACTION] promote_to_master_toggle", {
+
+  function closeReassignCluster() {
+    setReassignOpen(false);
+    setReassignRow(null);
+    setReassignToClusterId("");
+    setReassignErr("");
+  }
+
+  function openReassignCluster(row) {
+    setReassignRow(row);
+    setReassignToClusterId("");
+    setReassignErr("");
+    setReassignOpen(true);
+  }
+
+  function applyReassignCluster() {
+    const row = reassignRow;
+    const newClusterId = String(reassignToClusterId || "").trim();
+    const currentClusterId = String(row?.master_id || "").trim();
+
+    if (!row) {
+      setReassignErr("No record selected");
+      return;
+    }
+
+    if (!newClusterId) {
+      setReassignErr("New cluster id is required");
+      return;
+    }
+
+    if (newClusterId === currentClusterId) {
+      setReassignErr("New cluster id must be different");
+      return;
+    }
+
+    console.log("[MDM ACTION] reassign_cluster", {
       job_id: row.job_id,
-      master_id: row.master_id,
+      from_master_id: currentClusterId,
+      to_master_id: newClusterId,
       record_id: row.record_id,
       source_name: row.source_name,
       source_id: row.source_id,
+      auto_approve: true,
     });
+
+    closeReassignCluster();
+  }
+
+  function closeRejectDecision() {
+    setRejectOpen(false);
+    setRejectRow(null);
+    setRejectMode("");
+    setRejectErr("");
+  }
+
+  function openRejectDecision(row) {
+    setRejectRow(row);
+    setRejectMode("");
+    setRejectErr("");
+    setRejectOpen(true);
+  }
+
+  function applyRejectDecision() {
+    const row = rejectRow;
+    const mode = String(rejectMode || "").trim();
+
+    if (!row) {
+      setRejectErr("No record selected");
+      return;
+    }
+
+    if (mode !== "individual" && mode !== "rejected") {
+      setRejectErr("Select a rejection option");
+      return;
+    }
+
+    rejectMatch(row, mode);
+    closeRejectDecision();
   }
 
 
@@ -918,13 +1002,14 @@ export default function MdmPage() {
     });
   }
 
-  function rejectMatch(row) {
+  function rejectMatch(row, mode) {
     console.log("[MDM ACTION] reject_match", {
       job_id: row.job_id,
       master_id: row.master_id,
       record_id: row.record_id,
       source_name: row.source_name,
       source_id: row.source_id,
+      reject_mode: String(mode || "").trim(),
     });
   }
 
@@ -1095,17 +1180,29 @@ export default function MdmPage() {
           >
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path
-                d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-6z"
+                d="M12 2l9 5-9 5-9-5 9-5z"
                 stroke="currentColor"
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              <circle cx="11" cy="14" r="2.5" stroke="currentColor" strokeWidth="2" />
-              <path d="M13 16l2 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <path
+                d="M21 12l-9 5-9-5"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M21 17l-9 5-9-5"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
           </button>
+
 
 
 
@@ -1394,6 +1491,63 @@ export default function MdmPage() {
                     >
                       <button
                         type="button"
+                        title="View job logs"
+                        aria-disabled={!currentUserId || !selectedModelId}
+                        tabIndex={(!currentUserId || !selectedModelId) ? -1 : 0}
+                        onClick={() => {
+                          const isDisabled = !currentUserId || !selectedModelId;
+                          if (isDisabled) return;
+
+                          setMatchActionsOpen(false);
+                          openJobLogs();
+                        }}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: 0,
+                          background: "transparent",
+                          cursor: (!currentUserId || !selectedModelId) ? "not-allowed" : "pointer",
+                          color: "#000",
+                          fontWeight: 800,
+                          fontSize: 13,
+                          lineHeight: "16px",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          opacity: 1,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                          <path
+                            d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-6z"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          <circle cx="11" cy="14" r="2.5" stroke="currentColor" strokeWidth="2" />
+                          <path d="M13 16l2 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                        <span>View job logs</span>
+                      </button>
+
+                      <div
+                        aria-hidden="true"
+                        style={{
+                          height: 1,
+                          background: "rgba(0,0,0,0.10)",
+                          margin: "4px 6px",
+                        }}
+                      />
+
+                      <button
+                        type="button"
                         title="Clear matches"
                         aria-disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0}
                         tabIndex={(!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0) ? -1 : 0}
@@ -1634,6 +1788,34 @@ export default function MdmPage() {
                   </button>
                 </div>
 
+                {view === "exceptions" ? (
+                  <button
+                    className="mdmBtn mdmBtn--xs mdmBtn--soft"
+                    type="button"
+                    onClick={runAiSteward}
+                    title="AI Steward"
+                    aria-label="AI Steward"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <path d="M12 2v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      <circle cx="12" cy="4" r="1" fill="currentColor" />
+                      <rect x="6" y="7" width="12" height="10" rx="2.5" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                      <path d="M6 10H4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      <path d="M20 10H18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      <circle cx="10" cy="12" r="1" fill="currentColor" />
+                      <circle cx="14" cy="12" r="1" fill="currentColor" />
+                      <path d="M10 15h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                    <span style={{ fontWeight: 900 }}>AI Steward</span>
+                  </button>
+                ) : null}
+
                 <button
                   className="mdmBtn mdmBtn--xs mdmBtn--soft mdmRecordsDownloadBtn"
                   type="button"
@@ -1654,6 +1836,63 @@ export default function MdmPage() {
 
 
             <div className="mdmCard__body">
+
+              {view === "exceptions" && String(activeClusterId || "").trim() ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  style={{
+                    marginBottom: 10,
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    background: "rgba(37, 99, 235, 0.08)",
+                    color: "#000",
+                    fontWeight: 900,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                    <span style={{ whiteSpace: "nowrap" }}>Cluster view</span>
+                    <span
+                      className="mdmMono"
+                      title={String(activeClusterId)}
+                      style={{
+                        opacity: 0.9,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {String(activeClusterId)}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => refreshRecords()}
+                    disabled={recordsBusy}
+                    title="Back to exceptions view"
+                    aria-label="Back to exceptions view"
+                    style={{
+                      border: 0,
+                      padding: 0,
+                      margin: 0,
+                      background: "transparent",
+                      textDecoration: "underline",
+                      cursor: recordsBusy ? "wait" : "pointer",
+                      color: "rgba(37, 99, 235, 0.95)",
+                      font: "inherit",
+                      fontWeight: 900,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Back to exceptions view
+                  </button>
+                </div>
+              ) : null}
 
               {cleanupNotice ? (
                 <div
@@ -1698,7 +1937,6 @@ export default function MdmPage() {
               <div className="mdmWideTableWrap">
                 <table className={`mdmWideTable ${view === "exceptions" ? "isExceptions" : "isGolden"}`}>
 
-
                   <thead>
                     <tr>
                       <th>matching_model</th>
@@ -1712,20 +1950,45 @@ export default function MdmPage() {
                       <th>created_by</th>
                       <th>updated_at</th>
                       <th>updated_by</th>
-                      <th className="mdmWideStickyCol">actions</th>
+                      {showActionsColumn ? (
+                        <th className="mdmWideStickyCol">actions</th>
+                      ) : null}
 
                     </tr>
                   </thead>
 
                   <tbody>
                     {pagedRows.map((r) => {
-                      const isPromoted = !!promoted[r.uiKey];
 
                       return (
                         <tr key={r.uiKey}>
 
                           <td className="mdmMono">{r.matching_model}</td>
-                          <td className="mdmMono">{r.master_id}</td>
+                          <td className="mdmMono">
+                            {view === "exceptions" && String(r.master_id || "").trim() ? (
+                              <button
+                                type="button"
+                                onClick={() => openClusterById(r.master_id)}
+                                title={`View cluster ${String(r.master_id || "").trim()}`}
+                                aria-label={`View cluster ${String(r.master_id || "").trim()}`}
+                                disabled={recordsBusy}
+                                style={{
+                                  border: 0,
+                                  padding: 0,
+                                  margin: 0,
+                                  background: "transparent",
+                                  textDecoration: "underline",
+                                  cursor: recordsBusy ? "wait" : "pointer",
+                                  color: "rgba(37, 99, 235, 0.95)",
+                                  font: "inherit",
+                                }}
+                              >
+                                {r.master_id}
+                              </button>
+                            ) : (
+                              r.master_id
+                            )}
+                          </td>
                           <td className="mdmMono">{String(r.match_threshold)}</td>
                           <td>
                             {String(r.survivorship_strategy || "").trim() ? (
@@ -1746,6 +2009,7 @@ export default function MdmPage() {
                             )}
                           </td>
 
+
                           {USER_FIELD_KEYS.map((k) => (
                             <td key={k}>{String(r[k] || "").trim() ? r[k] : "—"}</td>
                           ))}
@@ -1755,59 +2019,59 @@ export default function MdmPage() {
                           <td className="mdmMono">{r.updated_at}</td>
                           <td className="mdmMono">{r.updated_by}</td>
 
-                          <td className="mdmWideStickyCol">
-                            {view === "exceptions" ? (
-                              <div className="mdmRowActions mdmRowActions--right">
-                                <button
-                                  className={`mdmBtn mdmBtn--xs mdmIconBtn ${isPromoted ? "mdmBtn--soft" : "mdmBtn--gold"}`}
-                                  type="button"
-                                  onClick={() => togglePromote(r)}
-                                  title={isPromoted ? "Unpromote" : "Promote to master"}
-                                  aria-label={isPromoted ? "Unpromote" : "Promote to master"}
-                                >
-                                  {isPromoted ? (
+                          {showActionsColumn ? (
+                            <td className="mdmWideStickyCol">
+                              {view === "exceptions" && String(activeClusterId || "").trim() ? (
+                                <div className="mdmRowActions mdmRowActions--right">
+                                  <button
+                                    className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
+                                    type="button"
+                                    onClick={() => openReassignCluster(r)}
+                                    title="Reassign cluster"
+                                    aria-label="Reassign cluster"
+                                    style={{ width: 34, height: 34, padding: 0, borderRadius: 10 }}
+                                  >
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                      <path d="M12 5v14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                                      <path d="M7 15l5 5 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                      <path d="M4 8h13" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                                      <path d="M14 5l3 3-3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                      <path d="M20 16H7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                                      <path d="M10 13l-3 3 3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                                     </svg>
-                                  ) : (
+                                  </button>
+
+                                  <button
+                                    className="mdmBtn mdmBtn--xs mdmBtn--run mdmIconBtn"
+                                    type="button"
+                                    onClick={() => approveMatch(r)}
+                                    title="Approve"
+                                    aria-label="Approve"
+                                    style={{ width: 34, height: 34, padding: 0, borderRadius: 10 }}
+                                  >
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                      <path d="M12 19V5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                                      <path d="M7 9l5-5 5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                      <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                                     </svg>
-                                  )}
-                                </button>
-
-                                <button
-                                  className="mdmBtn mdmBtn--xs mdmBtn--run mdmIconBtn"
-                                  type="button"
-                                  onClick={() => approveMatch(r)}
-                                  title="Approve match"
-                                  aria-label="Approve match"
-                                >
-                                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                    <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                                  </svg>
-                                </button>
+                                  </button>
 
 
-                                <button
-                                  className="mdmBtn mdmBtn--xs mdmBtn--danger mdmIconBtn"
-                                  type="button"
-                                  onClick={() => rejectMatch(r)}
-                                  title="Reject match"
-                                  aria-label="Reject match"
-                                >
-                                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                    <path d="M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                                    <path d="M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                                  </svg>
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="mdmTiny">—</span>
-                            )}
-                          </td>
+                                  <button
+                                    className="mdmBtn mdmBtn--xs mdmBtn--danger mdmIconBtn"
+                                    type="button"
+                                    onClick={() => openRejectDecision(r)}
+                                    title="Reject"
+                                    aria-label="Reject"
+                                    style={{ width: 34, height: 34, padding: 0, borderRadius: 10 }}
+                                  >
+                                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                      <path d="M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                                      <path d="M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                                    </svg>
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="mdmTiny">—</span>
+                              )}
+                            </td>
+                          ) : null}
 
                         </tr>
                       );
@@ -1816,7 +2080,7 @@ export default function MdmPage() {
                     {listRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={4 + USER_FIELD_KEYS.length + 4 + 1}
+                          colSpan={4 + USER_FIELD_KEYS.length + 4 + (showActionsColumn ? 1 : 0)}
                           className="mdmWideEmpty"
                         >
                           No results.
@@ -1971,6 +2235,152 @@ export default function MdmPage() {
 
             <div className="mdmDialog__body">
               <pre className="mdmPre">{safeJsonFromStringMaybe(jsonPopupPayload)}</pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+
+      {reassignOpen ? (
+        <div className="mdmOverlay" role="dialog" aria-modal="true" aria-label="Reassign cluster">
+          <div className="mdmDialog" style={{ width: 520 }}>
+            <div className="mdmDialog__head">
+              <div>
+                <div className="mdmDialog__title">Reassign cluster</div>
+                <div className="mdmDialog__sub">Move this record to a new cluster id (auto-approve).</div>
+              </div>
+              <button className="mdmX" type="button" onClick={closeReassignCluster} aria-label="Close">
+                ✕
+              </button>
+            </div>
+
+            <div className="mdmDialog__body">
+              <div style={{ padding: 18, display: "grid", gap: 12 }}>
+                <div className="mdmTiny">
+                  Current cluster id: <span className="mdmMono">{String(reassignRow?.master_id || "—")}</span>
+                </div>
+
+                <div className="mdmTiny">
+                  Record id: <span className="mdmMono">{String(reassignRow?.record_id || "—")}</span>
+                </div>
+
+                <div>
+                  <div className="mdmLabel">New cluster id</div>
+                  <input
+                    className="mdmInput"
+                    type="text"
+                    value={reassignToClusterId}
+                    onChange={(e) => setReassignToClusterId(e.target.value)}
+                    placeholder="Enter new cluster id"
+                    aria-label="New cluster id"
+                  />
+                </div>
+
+                {reassignErr ? (
+                  <div className="mdmTiny" style={{ color: "rgba(220,38,38,0.95)", fontWeight: 900 }}>
+                    {reassignErr}
+                  </div>
+                ) : null}
+
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button className="mdmBtn mdmBtn--soft" type="button" onClick={closeReassignCluster}>
+                    Cancel
+                  </button>
+
+                  <button
+                    className="mdmBtn mdmBtn--primary"
+                    type="button"
+                    onClick={applyReassignCluster}
+                    disabled={!String(reassignToClusterId || "").trim()}
+                  >
+                    Reassign
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+
+      {rejectOpen ? (
+        <div className="mdmOverlay" role="dialog" aria-modal="true" aria-label="Reject record">
+          <div className="mdmDialog" style={{ width: 560 }}>
+            <div className="mdmDialog__head">
+              <div>
+                <div className="mdmDialog__title">Reject record</div>
+                <div className="mdmDialog__sub">Choose what should happen to this record.</div>
+              </div>
+              <button className="mdmX" type="button" onClick={closeRejectDecision} aria-label="Close">
+                ✕
+              </button>
+            </div>
+
+            <div className="mdmDialog__body">
+              <div style={{ padding: 18, display: "grid", gap: 12 }}>
+                <div className="mdmTiny">
+                  Cluster id: <span className="mdmMono">{String(rejectRow?.master_id || "—")}</span>
+                </div>
+
+                <div className="mdmTiny">
+                  Record id: <span className="mdmMono">{String(rejectRow?.record_id || "—")}</span>
+                </div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                    <input
+                      type="radio"
+                      name="mdmRejectMode"
+                      value="individual"
+                      checked={rejectMode === "individual"}
+                      onChange={() => setRejectMode("individual")}
+                    />
+                    <span style={{ display: "grid", gap: 2 }}>
+                      <span style={{ fontWeight: 900 }}>Keep as individual</span>
+                      <span className="mdmTiny" style={{ opacity: 0.85 }}>
+                        Creates a new cluster for this record.
+                      </span>
+                    </span>
+                  </label>
+
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                    <input
+                      type="radio"
+                      name="mdmRejectMode"
+                      value="rejected"
+                      checked={rejectMode === "rejected"}
+                      onChange={() => setRejectMode("rejected")}
+                    />
+                    <span style={{ display: "grid", gap: 2 }}>
+                      <span style={{ fontWeight: 900 }}>Keep as rejected</span>
+                      <span className="mdmTiny" style={{ opacity: 0.85 }}>
+                        Reprocess later as an individual record.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+
+                {rejectErr ? (
+                  <div className="mdmTiny" style={{ color: "rgba(220,38,38,0.95)", fontWeight: 900 }}>
+                    {rejectErr}
+                  </div>
+                ) : null}
+
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button className="mdmBtn mdmBtn--soft" type="button" onClick={closeRejectDecision}>
+                    Cancel
+                  </button>
+
+                  <button
+                    className="mdmBtn mdmBtn--danger"
+                    type="button"
+                    onClick={applyRejectDecision}
+                    disabled={!String(rejectMode || "").trim()}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

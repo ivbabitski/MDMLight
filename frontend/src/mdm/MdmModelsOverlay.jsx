@@ -308,6 +308,14 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
           scheduleJobPoll(modelId, jobId, userId);
         } else {
           clearJobPoll(jobId);
+
+          try {
+            window.dispatchEvent(
+              new CustomEvent("mdm:model_run_finished", {
+                detail: { model_id: String(modelId), job_id: String(jobId), status, message },
+              })
+            );
+          } catch {}
         }
       } catch (e) {
         setRunInfoByModelId((prev) => ({

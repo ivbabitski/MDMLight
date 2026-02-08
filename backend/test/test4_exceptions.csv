@@ -1,0 +1,6 @@
+source_id,source_name,first_name,last_name,address_line1,address_line2,city,state,zip,country,phone_number,email,created_at,created_by,updated_at,updated_by
+6,Snowflake,May,Smith,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+7,CRM,Maria,Smith,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+8,Databricks,Mary,Smith,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+9,Databricks,Mary K,Smith,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+10,CRM,Maria,Smits,123 Meadow Pl,,Milwaukee,WI,53202,USA,555-312-5466,grace.nelson@example.com,2026-01-28T07:40:40Z,system,2026-02-06T18:55:50Z,system

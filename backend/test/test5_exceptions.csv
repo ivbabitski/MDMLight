@@ -1,0 +1,7 @@
+source_id,source_name,first_name,last_name,address_line1,address_line2,city,state,zip,country,phone_number,email,created_at,created_by,updated_at,updated_by
+11,Snowflake,Peter,Green,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+12,CRM,Peter,Green,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+13,Databricks,Peter S ,Greene,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+14,Databricks,Pete,Greene,310 Washington Pl,,Memphis,TN,38103,USA,555-312-5466,sebastian.davis@example.com,2026-01-11T15:40:00Z,system,2026-01-30T12:35:00Z,system
+15,CRM,Pete S,Green,123 Meadow Pl,,Milwaukee,WI,53202,USA,555-312-5466,grace.nelson@example.com,2026-01-28T07:40:40Z,system,2026-02-06T18:55:50Z,system
+16,CRM,Peter S ,Green,123 Meadow Pl,,Milwaukee,WI,53202,USA,555-312-5466,grace.nelson@example.com,2026-01-28T07:40:40Z,system,2026-02-06T18:55:50Z,system
