@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 from flask import Blueprint, jsonify, request
@@ -83,8 +84,72 @@ def list_recon_cluster_records():
             500,
         )
 
-    # Keep the column list identical to /api/recon-cluster/cluster-records so the UI can reuse the same table.
     f_cols = [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+
+    if status_mode == "exceptions":
+        mapped: List[str] = []
+        try:
+            with get_conn() as conn:
+                mrow = conn.execute(
+                    "SELECT config_json FROM mdm_models WHERE id = ? LIMIT 1",
+                    (model_id,),
+                ).fetchone()
+        except Exception:
+            mrow = None
+
+        cfg_raw = ""
+        if mrow is not None:
+            try:
+                cfg_raw = str(mrow["config_json"] or "")
+            except Exception:
+                cfg_raw = ""
+
+        cfg = {}
+        if cfg_raw.strip():
+            try:
+                cfg = json.loads(cfg_raw)
+            except Exception:
+                cfg = {}
+
+        fields_arr = None
+        if isinstance(cfg, dict) and isinstance(cfg.get("config"), dict):
+            fields_arr = cfg["config"].get("fields")
+        if fields_arr is None and isinstance(cfg, dict):
+            fields_arr = cfg.get("fields")
+
+        if isinstance(fields_arr, list):
+            for f in fields_arr:
+                if not isinstance(f, dict):
+                    continue
+
+                code = str(f.get("code") or "").strip()
+                label = str(f.get("label") or "").strip()
+                if not code or not label:
+                    continue
+
+                c_lo = code.lower()
+                l_lo = label.lower()
+
+                if l_lo == c_lo:
+                    continue
+                if l_lo.startswith("f") and l_lo[1:].isdigit():
+                    continue
+
+                if not c_lo.startswith("f"):
+                    continue
+                tail = c_lo[1:]
+                if not tail.isdigit():
+                    continue
+
+                n = int(tail)
+                if n < 1 or n > 20:
+                    continue
+
+                mapped.append(f"f{n:02d}")
+
+        mapped = sorted({x for x in mapped}, key=lambda x: int(x[1:]))
+        f_cols = mapped
+
     cols = [
         "rowid AS id",
         "job_id",
@@ -96,6 +161,8 @@ def list_recon_cluster_records():
         "source_id",
         "match_status",
         "match_score",
+        "match_threshold",
+        "exceptions_threshold",
         "created_at",
         "created_by",
         "updated_at",
@@ -110,9 +177,10 @@ def list_recon_cluster_records():
     params: List[Any] = [app_user_id, model_id]
 
     if status_mode == "match":
-        where_clauses.append("LOWER(COALESCE(match_status, '')) = 'match'")
+        where_clauses.append("LOWER(COALESCE(match_status, 'match')) = 'match'")
     else:
-        where_clauses.append("LOWER(COALESCE(match_status, '')) <> 'match'")
+        where_clauses.append("LOWER(TRIM(COALESCE(match_status, ''))) = 'exception'")
+
 
     sql = (
         f"SELECT {', '.join(cols)} "

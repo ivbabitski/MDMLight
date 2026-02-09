@@ -36,6 +36,17 @@ def get_conn() -> Iterator[sqlite3.Connection]:
 
     conn.create_function("norm", 1, _norm_sql)
 
+    def _round2(x: object) -> float:
+        try:
+            if x is None:
+                return 0.0
+            return round(float(x), 2)
+        except Exception:
+            return 0.0
+
+    conn.create_function("round2", 1, _round2)
+
+
     try:
         yield conn
         conn.commit()
@@ -908,6 +919,42 @@ def init_api_batch() -> None:
         )
 
 
+def init_api_source_input() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS api_source_input (
+              batch_id TEXT NOT NULL REFERENCES api_batch(batch_id),
+
+              app_user_id INTEGER NOT NULL REFERENCES users(id),
+              model_id TEXT NOT NULL REFERENCES mdm_models(id),
+
+              source_name TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+
+              f01 TEXT, f02 TEXT, f03 TEXT, f04 TEXT, f05 TEXT,
+              f06 TEXT, f07 TEXT, f08 TEXT, f09 TEXT, f10 TEXT,
+              f11 TEXT, f12 TEXT, f13 TEXT, f14 TEXT, f15 TEXT,
+              f16 TEXT, f17 TEXT, f18 TEXT, f19 TEXT, f20 TEXT,
+
+              created_at TEXT NOT NULL,
+              created_by TEXT NOT NULL,
+              updated_at TEXT,
+              updated_by TEXT,
+
+              PRIMARY KEY (app_user_id, model_id, batch_id, source_name, source_id)
+            )
+            """
+        )
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_api_source_input_batch_id ON api_source_input(batch_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_api_source_input_user_model_batch ON api_source_input(app_user_id, model_id, batch_id)"
+        )
+
+
 def init_all_tables() -> None:
     # existing
     init_users()
@@ -924,6 +971,7 @@ def init_all_tables() -> None:
     # api
     init_api_key()
     init_api_batch()
+    init_api_source_input()
 
 
 

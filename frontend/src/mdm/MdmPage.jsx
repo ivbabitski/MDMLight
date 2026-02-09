@@ -232,6 +232,37 @@ async function fetchGoldenRecordRecords(appUserId, modelId) {
 }
 
 
+async function enqueueModelRun(appUserId, modelId) {
+  const base = String(API_BASE || "").trim();
+  const mid = String(modelId || "").trim();
+  const url = `${base}/match/run?t=${Date.now()}`;
+
+  const userId = String(appUserId || "").trim();
+
+  return fetchJsonWithUserId(
+    url,
+    {
+      userId,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: mid }),
+    },
+    "run model"
+  );
+}
+
+
+async function fetchMatchStatus(appUserId, jobId) {
+  const base = String(API_BASE || "").trim();
+  const jid = String(jobId || "").trim();
+  const url = `${base}/match/status/${encodeURIComponent(jid)}?t=${Date.now()}`;
+
+  const userId = String(appUserId || "").trim();
+
+  return fetchJsonWithUserId(url, { userId }, "match status");
+}
+
+
 async function cleanupReconCluster(appUserId, modelId) {
   const base = String(API_BASE || "").trim();
   const mid = String(modelId || "").trim();
@@ -312,6 +343,9 @@ export default function MdmPage() {
   const [confirmErr, setConfirmErr] = useState("");
 
   const [cleanupNotice, setCleanupNotice] = useState("");
+
+  const [runInfo, setRunInfo] = useState({ job_id: "", status: "", message: "" });
+  const runPollTimerRef = useRef(0);
 
   const refreshSourceSummary = useCallback(async () => {
     const userId = String(currentUserId || "").trim();
@@ -461,6 +495,19 @@ export default function MdmPage() {
   useEffect(() => {
     function onSelectedModelChanged() {
       setCleanupNotice("");
+
+      const t = Number(runPollTimerRef.current || 0);
+      if (t) {
+        try {
+          window.clearTimeout(t);
+        } catch {
+          // ignore
+        }
+        runPollTimerRef.current = 0;
+      }
+
+      setRunInfo({ job_id: "", status: "", message: "" });
+
       refreshSourceSummary();
       refreshMatchingSummary();
     }
@@ -524,14 +571,23 @@ export default function MdmPage() {
 
     const uiFields = normalizeUiFieldsFromDbRow(row);
 
+    const survLabel =
+      (matchingSummary && typeof matchingSummary === "object" && matchingSummary.survivorship_label != null)
+        ? String(matchingSummary.survivorship_label)
+        : "";
+
     return {
       ...row,
       uiKey: row?.id != null ? String(row.id) : `${clusterId}::${sourceName}::${sourceId}`,
 
       matching_model: String(row?.model_name || row?.model_id || ""),
       master_id: clusterId,
-      match_threshold: "",
-      survivorship_strategy: "",
+
+      match_status: row?.match_status != null ? String(row.match_status) : "",
+      match_score: row?.match_score != null ? String(row.match_score) : "",
+      match_threshold: row?.match_threshold != null ? String(row.match_threshold) : "",
+      exceptions_threshold: row?.exceptions_threshold != null ? String(row.exceptions_threshold) : "",
+      survivorship_strategy: survLabel,
 
       cluster_id: clusterId,
 
@@ -719,8 +775,15 @@ export default function MdmPage() {
       for (const rawKey of Object.keys(rawLabels)) {
         const key = String(rawKey || "").trim();
         if (!key) continue;
+
         const v = String(rawLabels[rawKey] || "").trim();
         if (!v) continue;
+
+        const kLo = key.toLowerCase();
+        const vLo = v.toLowerCase();
+
+        if (vLo === kLo) continue;
+        if (/^f\d{1,2}$/.test(vLo)) continue;
 
         const m = key.match(/^f(\d{1,2})$/i);
         if (m) {
@@ -733,13 +796,24 @@ export default function MdmPage() {
     }
 
     const labelByDbKeyFromSource = {};
-    if (Array.isArray(sourceFieldKeys) && Array.isArray(sourceFieldLabelsAligned)) {
-      const n = Math.min(sourceFieldKeys.length, sourceFieldLabelsAligned.length);
-      for (let i = 0; i < n; i += 1) {
-        const key = String(sourceFieldKeys[i] || "").trim();
-        const v = String(sourceFieldLabelsAligned[i] || "").trim();
-        if (!key || !v) continue;
-        labelByDbKeyFromSource[key] = v;
+    const labeledFieldsFromSource = Array.isArray(sourceSummary?.labeled_fields) ? sourceSummary.labeled_fields : [];
+    for (const lf of labeledFieldsFromSource) {
+      const code = String(lf?.code || "").trim();
+      const label = String(lf?.label || "").trim();
+      if (!code || !label) continue;
+
+      const cLo = code.toLowerCase();
+      const lLo = label.toLowerCase();
+
+      if (lLo === cLo) continue;
+      if (/^f\d{1,2}$/.test(lLo)) continue;
+
+      const m = code.match(/^f(\d{1,2})$/i);
+      if (m) {
+        const dbKey = `f${String(m[1]).padStart(2, "0")}`;
+        labelByDbKeyFromSource[dbKey] = label;
+      } else {
+        labelByDbKeyFromSource[code] = label;
       }
     }
 
@@ -752,7 +826,88 @@ export default function MdmPage() {
     }
 
     return out;
-  }, [matchingSummary, sourceFieldKeys, sourceFieldLabelsAligned]);
+  }, [matchingSummary, sourceSummary]);
+
+
+  const userFieldKeys = useMemo(() => {
+    const labelByDbKey = {};
+
+    const rawLabels = (
+      (matchingSummary && typeof matchingSummary === "object" && matchingSummary.field_level_labels) ||
+      (matchingSummary && typeof matchingSummary === "object" && matchingSummary.model_json && matchingSummary.model_json.field_level_labels) ||
+      null
+    );
+
+    if (rawLabels && typeof rawLabels === "object" && !Array.isArray(rawLabels)) {
+      for (const rawKey of Object.keys(rawLabels)) {
+        const key = String(rawKey || "").trim();
+        if (!key) continue;
+
+        const v = String(rawLabels[rawKey] || "").trim();
+        if (!v) continue;
+
+        const kLo = key.toLowerCase();
+        const vLo = v.toLowerCase();
+
+        if (vLo === kLo) continue;
+        if (/^f\d{1,2}$/.test(vLo)) continue;
+
+        const m = key.match(/^f(\d{1,2})$/i);
+        if (!m) continue;
+        const n = Number(m[1]);
+        if (!Number.isFinite(n) || n < 1 || n > 20) continue;
+
+        const dbKey = `f${String(n).padStart(2, "0")}`;
+        labelByDbKey[dbKey] = v;
+      }
+    }
+
+    if (Object.keys(labelByDbKey).length === 0) {
+      const labeledFieldsFromSource = Array.isArray(sourceSummary?.labeled_fields) ? sourceSummary.labeled_fields : [];
+      for (const lf of labeledFieldsFromSource) {
+        const code = String(lf?.code || "").trim();
+        const label = String(lf?.label || "").trim();
+        if (!code || !label) continue;
+
+        const cLo = code.toLowerCase();
+        const lLo = label.toLowerCase();
+
+        if (lLo === cLo) continue;
+        if (/^f\d{1,2}$/.test(lLo)) continue;
+
+        const m = code.match(/^f(\d{1,2})$/i);
+        if (!m) continue;
+        const n = Number(m[1]);
+        if (!Number.isFinite(n) || n < 1 || n > 20) continue;
+
+        const dbKey = `f${String(n).padStart(2, "0")}`;
+        labelByDbKey[dbKey] = label;
+      }
+    }
+
+    const nums = [];
+    for (const dbKey of Object.keys(labelByDbKey)) {
+      const m = dbKey.match(/^f(\d{2})$/i);
+      if (!m) continue;
+
+      const n = Number(m[1]);
+      if (!Number.isFinite(n) || n < 1 || n > 20) continue;
+      nums.push(n);
+    }
+
+    nums.sort((a, b) => a - b);
+
+    const out = [];
+    const seen = new Set();
+    for (const n of nums) {
+      const k = `f${n}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(k);
+    }
+
+    return out;
+  }, [matchingSummary, sourceSummary]);
 
 
   const matchingFields = useMemo(() => {
@@ -793,13 +948,16 @@ export default function MdmPage() {
       const parts = [
         r.matching_model,
         r.master_id,
+        r.match_status,
+        r.match_score,
         r.cluster_id,
         r.record_id,
         r.source_name,
         r.source_id,
+        ...userFieldKeys.map((k) => r[k]),
         r.match_threshold,
+        r.exceptions_threshold,
         r.survivorship_strategy,
-        ...USER_FIELD_KEYS.map((k) => r[k]),
         r.created_at,
         r.created_by,
         r.updated_at,
@@ -817,7 +975,7 @@ export default function MdmPage() {
     }
 
     return m;
-  }, [rows]);
+  }, [rows, userFieldKeys]);
 
   const listRows = useMemo(() => {
     const needle = recordSearch.trim().toLowerCase();
@@ -885,9 +1043,12 @@ export default function MdmPage() {
     const cols = [
       "matching_model",
       "master_id",
+      "match_status",
+      "match_score",
+      ...userFieldKeys,
       "match_threshold",
+      "exceptions_threshold",
       "survivorship_strategy",
-      ...USER_FIELD_KEYS,
       "created_at",
       "created_by",
       "updated_at",
@@ -917,6 +1078,100 @@ export default function MdmPage() {
     setJsonPopupTitle(String(title || "JSON"));
     setJsonPopupPayload(payload);
     setJsonPopupOpen(true);
+  }
+
+  function clearRunPoll() {
+    const t = Number(runPollTimerRef.current || 0);
+    if (!t) return;
+
+    try {
+      window.clearTimeout(t);
+    } catch {
+      // ignore
+    }
+
+    runPollTimerRef.current = 0;
+  }
+
+  function scheduleRunPoll(modelId, jobId, userId) {
+    clearRunPoll();
+
+    runPollTimerRef.current = window.setTimeout(async () => {
+      try {
+        const data = await fetchMatchStatus(userId, jobId);
+        const status = String(data?.status || "");
+        const message = String(data?.message || "");
+
+        setRunInfo({ job_id: String(jobId), status, message });
+
+        if (status && status !== "completed" && status !== "failed") {
+          scheduleRunPoll(modelId, jobId, userId);
+          return;
+        }
+
+        clearRunPoll();
+
+        try {
+          window.dispatchEvent(
+            new CustomEvent("mdm:model_run_finished", {
+              detail: { model_id: String(modelId), job_id: String(jobId), status, message },
+            })
+          );
+        } catch {}
+      } catch (e) {
+        setRunInfo({
+          job_id: String(jobId),
+          status: "status_error",
+          message: String(e?.message || e),
+        });
+        clearRunPoll();
+      }
+    }, 750);
+  }
+
+  async function runModelNow() {
+    const userId = String(currentUserId || "").trim();
+    if (!userId) {
+      setMatchingSummaryErr("X-User-Id is required (login)");
+      return;
+    }
+
+    let modelId = "";
+    try {
+      modelId = String(localStorage.getItem(LS_SELECTED_MODEL_ID) || "").trim();
+    } catch {}
+
+    if (!modelId) {
+      setMatchingSummaryErr("model_id is required (select a model)");
+      return;
+    }
+
+    if (modelId !== String(selectedModelId || "").trim()) {
+      setSelectedModelId(modelId);
+    }
+
+    setMatchingSummaryErr("");
+    clearRunPoll();
+    setRunInfo({ job_id: "", status: "", message: "" });
+
+    try {
+      const result = await enqueueModelRun(userId, modelId);
+
+      const jobId = String(result?.job_id || "").trim();
+      const status = String(result?.status || "queued").trim() || "queued";
+      const message = String(result?.message || "").trim();
+
+      if (!jobId) throw new Error("run model response missing job_id");
+
+      setRunInfo({ job_id: jobId, status, message });
+
+      scheduleRunPoll(modelId, jobId, userId);
+    } catch (e) {
+      const msg = String(e?.message || e);
+      setMatchingSummaryErr(msg);
+      setRunInfo({ job_id: "", status: "", message: "" });
+      clearRunPoll();
+    }
   }
 
   function openJobLogs() {
@@ -1158,6 +1413,16 @@ export default function MdmPage() {
 
   return (
     <div className="mdm">
+      <style>
+        {`
+          @keyframes mdmRunBlink {
+            0% { opacity: 0.20; }
+            50% { opacity: 1; }
+            100% { opacity: 0.20; }
+          }
+        `}
+      </style>
+
       {/* TOP HEADER ONLY */}
       <div className="mdmTopbar">
         <div className="mdmBrand">
@@ -1462,6 +1727,55 @@ export default function MdmPage() {
                     justifyContent: "center",
                   }}
                 >
+                  {(() => {
+                    const st = String(runInfo?.status || "").trim().toLowerCase();
+                    const isBusy = st === "queued" || st === "running";
+
+                    if (!isBusy) return null;
+
+                    return (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        title="Model is running"
+                        style={{
+                          position: "absolute",
+                          top: -10,
+                          right: -10,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          background: "rgba(255,255,255,0.98)",
+                          border: "1px solid rgba(0,0,0,0.10)",
+                          boxShadow: "0 10px 22px rgba(0,0,0,0.12)",
+                          fontSize: 12,
+                          fontWeight: 900,
+                          lineHeight: "14px",
+                          color: "rgba(0,0,0,0.78)",
+                          pointerEvents: "none",
+                          userSelect: "none",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: 999,
+                            background: "rgba(34,197,94,0.95)",
+                            boxShadow: "0 0 0 4px rgba(34,197,94,0.18)",
+                            animation: "mdmRunBlink 0.9s ease-in-out infinite",
+                            flex: "0 0 10px",
+                          }}
+                        />
+                        <span>Running</span>
+                      </div>
+                    );
+                  })()}
+
                   <button
                     className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
                     type="button"
@@ -1498,148 +1812,202 @@ export default function MdmPage() {
                     <div
                       style={{
                         position: "absolute",
-                        top: "calc(100% + 10px)",
+                        top: "100%",
                         right: 0,
-                        minWidth: 270,
-                        background: "rgba(255,255,255,0.98)",
-                        border: "1px solid rgba(0,0,0,0.12)",
-                        borderRadius: 12,
-                        padding: 6,
-                        boxShadow: "0 14px 40px rgba(0,0,0,0.25)",
+                        paddingTop: 10,
                         zIndex: 60,
-                        color: "#000",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 4,
-                        boxSizing: "border-box",
                       }}
                     >
-                      <button
-                        type="button"
-                        title="View job logs"
-                        aria-disabled={!currentUserId || !selectedModelId}
-                        tabIndex={(!currentUserId || !selectedModelId) ? -1 : 0}
-                        onClick={() => {
-                          const isDisabled = !currentUserId || !selectedModelId;
-                          if (isDisabled) return;
-
-                          setMatchActionsOpen(false);
-                          openJobLogs();
-                        }}
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "8px 10px",
-                          borderRadius: 10,
-                          border: 0,
-                          background: "transparent",
-                          cursor: (!currentUserId || !selectedModelId) ? "not-allowed" : "pointer",
-                          color: "#000",
-                          fontWeight: 800,
-                          fontSize: 13,
-                          lineHeight: "16px",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          opacity: 1,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 8,
-                        }}
-                      >
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                          <path
-                            d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-6z"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                          <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                          <circle cx="11" cy="14" r="2.5" stroke="currentColor" strokeWidth="2" />
-                          <path d="M13 16l2 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                        </svg>
-                        <span>View job logs</span>
-                      </button>
-
                       <div
-                        aria-hidden="true"
                         style={{
-                          height: 1,
-                          background: "rgba(0,0,0,0.10)",
-                          margin: "4px 6px",
-                        }}
-                      />
-
-                      <button
-                        type="button"
-                        title="Clear matches"
-                        aria-disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0}
-                        tabIndex={(!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0) ? -1 : 0}
-                        onClick={() => {
-                          const isDisabled = !currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0;
-                          if (isDisabled) return;
-
-                          setMatchActionsOpen(false);
-                          setConfirmErr("");
-                          setConfirmKind("recon");
-                          setConfirmOpen(true);
-                        }}
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "8px 10px",
-                          borderRadius: 10,
-                          border: 0,
-                          background: "transparent",
-                          cursor: (!currentUserId || !selectedModelId || Number(matchingSummary?.match_clusters || 0) <= 0) ? "not-allowed" : "pointer",
+                          minWidth: 270,
+                          background: "rgba(255,255,255,0.98)",
+                          border: "1px solid rgba(0,0,0,0.12)",
+                          borderRadius: 12,
+                          padding: 6,
+                          boxShadow: "0 14px 40px rgba(0,0,0,0.25)",
                           color: "#000",
-                          fontWeight: 800,
-                          fontSize: 13,
-                          lineHeight: "16px",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          opacity: 1,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 4,
+                          boxSizing: "border-box",
                         }}
                       >
-                        Clear matches
-                      </button>
+                        <button
+                          type="button"
+                          title="Run model"
+                          aria-disabled={!currentUserId || !selectedModelId}
+                          tabIndex={(!currentUserId || !selectedModelId) ? -1 : 0}
+                          onClick={() => {
+                            const isDisabled = !currentUserId || !selectedModelId;
+                            if (isDisabled) return;
 
-                      <button
-                        type="button"
-                        title="Clear golden records"
-                        aria-disabled={!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0}
-                        tabIndex={(!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0) ? -1 : 0}
-                        onClick={() => {
-                          const isDisabled = !currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0;
-                          if (isDisabled) return;
+                            setMatchActionsOpen(false);
+                            runModelNow();
+                          }}
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: 0,
+                            background: "transparent",
+                            cursor: (!currentUserId || !selectedModelId) ? "not-allowed" : "pointer",
+                            color: "#000",
+                            fontWeight: 800,
+                            fontSize: 13,
+                            lineHeight: "16px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            opacity: 1,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path d="M8 5v14l11-7-11-7z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                          </svg>
+                          <span>Run model</span>
+                        </button>
 
-                          setMatchActionsOpen(false);
-                          setConfirmErr("");
-                          setConfirmKind("golden");
-                          setConfirmOpen(true);
-                        }}
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "8px 10px",
-                          borderRadius: 10,
-                          border: 0,
-                          background: "transparent",
-                          cursor: (!currentUserId || !selectedModelId || Number(matchingSummary?.golden_records || 0) <= 0) ? "not-allowed" : "pointer",
-                          color: "#000",
-                          fontWeight: 800,
-                          fontSize: 13,
-                          lineHeight: "16px",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          opacity: 1,
-                        }}
-                      >
-                        Clear golden records
-                      </button>
+                        <div
+                          aria-hidden="true"
+                          style={{
+                            height: 1,
+                            background: "rgba(0,0,0,0.10)",
+                            margin: "4px 6px",
+                          }}
+                        />
+
+                        <button
+                          type="button"
+                          title="View job logs"
+                          aria-disabled={!currentUserId || !selectedModelId}
+                          tabIndex={(!currentUserId || !selectedModelId) ? -1 : 0}
+                          onClick={() => {
+                            const isDisabled = !currentUserId || !selectedModelId;
+                            if (isDisabled) return;
+
+                            setMatchActionsOpen(false);
+                            openJobLogs();
+                          }}
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: 0,
+                            background: "transparent",
+                            cursor: (!currentUserId || !selectedModelId) ? "not-allowed" : "pointer",
+                            color: "#000",
+                            fontWeight: 800,
+                            fontSize: 13,
+                            lineHeight: "16px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            opacity: 1,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path
+                              d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-6z"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                            <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            <circle cx="11" cy="14" r="2.5" stroke="currentColor" strokeWidth="2" />
+                            <path d="M13 16l2 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                          <span>View job logs</span>
+                        </button>
+
+                        <div
+                          aria-hidden="true"
+                          style={{
+                            height: 1,
+                            background: "rgba(0,0,0,0.10)",
+                            margin: "4px 6px",
+                          }}
+                        />
+
+                        <button
+                          type="button"
+                          title="Clear matches"
+                          aria-disabled={!currentUserId || !selectedModelId}
+                          tabIndex={(!currentUserId || !selectedModelId) ? -1 : 0}
+                          onClick={() => {
+                            const isDisabled = !currentUserId || !selectedModelId;
+                            if (isDisabled) return;
+
+                            setMatchActionsOpen(false);
+                            setConfirmErr("");
+                            setConfirmKind("recon");
+                            setConfirmOpen(true);
+                          }}
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: 0,
+                            background: "transparent",
+                            cursor: (!currentUserId || !selectedModelId) ? "not-allowed" : "pointer",
+                            color: "#000",
+                            fontWeight: 800,
+                            fontSize: 13,
+                            lineHeight: "16px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            opacity: 1,
+                          }}
+                        >
+                          Clear matches
+                        </button>
+
+                        <button
+                          type="button"
+                          title="Clear golden records"
+                          aria-disabled={!currentUserId || !selectedModelId}
+                          tabIndex={(!currentUserId || !selectedModelId) ? -1 : 0}
+                          onClick={() => {
+                            const isDisabled = !currentUserId || !selectedModelId;
+                            if (isDisabled) return;
+
+                            setMatchActionsOpen(false);
+                            setConfirmErr("");
+                            setConfirmKind("golden");
+                            setConfirmOpen(true);
+                          }}
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: 0,
+                            background: "transparent",
+                            cursor: (!currentUserId || !selectedModelId) ? "not-allowed" : "pointer",
+                            color: "#000",
+                            fontWeight: 800,
+                            fontSize: 13,
+                            lineHeight: "16px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            opacity: 1,
+                          }}
+                        >
+                          Clear golden records
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
@@ -1667,65 +2035,34 @@ export default function MdmPage() {
                 <div className="mdmSectionTitle">Matching fields</div>
 
                 {matchingFields.length ? (
-                  <div className="mdmBarList">
+                  <div className="mdmBarList mdmBarList--matchFields">
                     {matchingFields.map((f) => {
                       const name = String(f?.label || f?.code || "").trim() || "—";
 
                       const wRaw = Number(f?.weight);
                       const weightStr = Number.isFinite(wRaw) ? wRaw.toFixed(2) : "—";
 
-                      let pctNum = Number(f?.weight_pct);
-                      if (!Number.isFinite(pctNum)) {
-                        pctNum = Number.isFinite(wRaw) ? (wRaw * 100.0) : 0;
-                      }
-                      const pct = Math.max(0, Math.min(100, Math.round(pctNum)));
+                      const tRaw = Number(f?.match_threshold);
+                      const tPctNum = Number.isFinite(tRaw) ? (tRaw <= 1 ? (tRaw * 100.0) : tRaw) : 0;
+                      const tPct = Number.isFinite(tRaw) ? Math.max(0, Math.min(100, Math.round(tPctNum))) : 0;
+                      const tPctLabel = Number.isFinite(tRaw) ? `${fmtInt(tPct)}%` : "—";
 
                       return (
                         <div
-                          className="mdmBarRow"
+                          className="mdmBarRow mdmBarRow--matchFields"
                           key={String(f?.code || name)}
-                          style={{
-                            gridTemplateColumns: "minmax(0, max-content) minmax(140px, 1fr) auto",
-                            alignItems: "center",
-                          }}
                         >
-                          <div
-                            className="mdmBarName"
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              minWidth: 0,
-                            }}
-                          >
-                            <span
-                              style={{
-                                flex: "1 1 auto",
-                                minWidth: 0,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {name}
-                            </span>
-
-                            <span
-                              className="mdmTiny"
-                              style={{
-                                flex: "0 0 auto",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              w: {weightStr}
-                            </span>
+                          <div className="mdmBarName mdmBarName--matchFields" title={name}>
+                            {name}
                           </div>
+
+                          <div className="mdmTiny mdmMatchWeight">w: {weightStr}</div>
 
                           <div className="mdmBarTrack" aria-hidden="true">
-                            <span className="mdmBarFill" style={{ width: `${pct}%` }} />
+                            <span className="mdmBarFill" style={{ width: `${tPct}%` }} />
                           </div>
 
-                          <div className="mdmBarVal">{fmtInt(pct)}%</div>
+                          <div className="mdmBarVal">{tPctLabel}</div>
                         </div>
                       );
 
@@ -1966,11 +2303,14 @@ export default function MdmPage() {
                     <tr>
                       <th>matching_model</th>
                       <th>master_id</th>
-                      <th>match_threshold</th>
-                      <th>survivorship_json</th>
-                      {USER_FIELD_KEYS.map((k) => (
+                      <th>match_status</th>
+                      <th>match_score</th>
+                      {userFieldKeys.map((k) => (
                         <th key={k}>{userFieldLabelByKey[k] || k.toUpperCase()}</th>
                       ))}
+                      <th>match_threshold</th>
+                      <th>exceptions_threshold</th>
+                      <th>survivorship_json</th>
                       <th>created_at</th>
                       <th>created_by</th>
                       <th>updated_at</th>
@@ -1993,7 +2333,7 @@ export default function MdmPage() {
                             {view === "exceptions" && String(r.master_id || "").trim() ? (
                               <button
                                 type="button"
-                                onClick={() => openClusterById(r.master_id)}
+                                onClick={() => openClusterById(r.cluster_id)}
                                 title={`View cluster ${String(r.master_id || "").trim()}`}
                                 aria-label={`View cluster ${String(r.master_id || "").trim()}`}
                                 disabled={recordsBusy}
@@ -2014,30 +2354,51 @@ export default function MdmPage() {
                               r.master_id
                             )}
                           </td>
-                          <td className="mdmMono">{String(r.match_threshold)}</td>
-                          <td>
-                            {String(r.survivorship_strategy || "").trim() ? (
-                              <button
-                                type="button"
-                                className="mdmBtn mdmBtn--xs mdmBtn--soft"
-                                onClick={() => openJsonPopup(
-                                  `Survivorship JSON (master_id: ${String(r.master_id || "—")})`,
-                                  r.survivorship_strategy
-                                )}
-                                aria-label="Open survivorship JSON"
-                                title="Open survivorship JSON"
-                              >
-                                JSON
-                              </button>
-                            ) : (
-                              <span className="mdmTiny">—</span>
-                            )}
+
+                          <td className="mdmMono">
+                            {String(r.match_status ?? "").trim() ? String(r.match_status) : "—"}
                           </td>
 
+                          <td className="mdmMono">
+                            {String(r.match_score ?? "").trim() ? String(r.match_score) : "—"}
+                          </td>
 
-                          {USER_FIELD_KEYS.map((k) => (
+                          {userFieldKeys.map((k) => (
                             <td key={k}>{String(r[k] || "").trim() ? r[k] : "—"}</td>
                           ))}
+
+                          <td className="mdmMono">
+                            {String(r.match_threshold ?? "").trim() ? String(r.match_threshold) : "—"}
+                          </td>
+
+                          <td className="mdmMono">
+                            {String(r.exceptions_threshold ?? "").trim() ? String(r.exceptions_threshold) : "—"}
+                          </td>
+
+                          <td>
+                            {(() => {
+                              const s = String(r.survivorship_strategy || "").trim();
+                              if (!s) return <span className="mdmTiny">—</span>;
+
+                              const looksJson = s.startsWith("{") || s.startsWith("[");
+                              if (!looksJson) return <span>{s}</span>;
+
+                              return (
+                                <button
+                                  type="button"
+                                  className="mdmBtn mdmBtn--xs mdmBtn--soft"
+                                  onClick={() => openJsonPopup(
+                                    `Survivorship JSON (master_id: ${String(r.master_id || "—")})`,
+                                    r.survivorship_strategy
+                                  )}
+                                  aria-label="Open survivorship JSON"
+                                  title="Open survivorship JSON"
+                                >
+                                  JSON
+                                </button>
+                              );
+                            })()}
+                          </td>
 
                           <td className="mdmMono">{r.created_at}</td>
                           <td className="mdmMono">{r.created_by}</td>
@@ -2046,7 +2407,9 @@ export default function MdmPage() {
 
                           {showActionsColumn ? (
                             <td className="mdmWideStickyCol">
-                              {view === "exceptions" && String(activeClusterId || "").trim() ? (
+                              {view === "exceptions" &&
+                              String(activeClusterId || "").trim() &&
+                              String(r.match_status ?? "").trim().toLowerCase().includes("exception") ? (
                                 <div className="mdmRowActions mdmRowActions--right">
                                   <button
                                     className="mdmBtn mdmBtn--xs mdmBtn--soft mdmIconBtn"
@@ -2105,7 +2468,7 @@ export default function MdmPage() {
                     {listRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={4 + USER_FIELD_KEYS.length + 4 + (showActionsColumn ? 1 : 0)}
+                          colSpan={4 + userFieldKeys.length + 3 + 4 + (showActionsColumn ? 1 : 0)}
                           className="mdmWideEmpty"
                         >
                           No results.

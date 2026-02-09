@@ -86,7 +86,6 @@ def list_recon_cluster_records_for_cluster():
             500,
         )
 
-    # Keep the column list identical to /api/recon-cluster/records so the UI can reuse the same table.
     f_cols = [f"f{str(i).zfill(2)}" for i in range(1, 21)]
     cols = [
         "rowid AS id",
@@ -99,6 +98,8 @@ def list_recon_cluster_records_for_cluster():
         "source_id",
         "match_status",
         "match_score",
+        "match_threshold",
+        "exceptions_threshold",
         "created_at",
         "created_by",
         "updated_at",
@@ -113,11 +114,10 @@ def list_recon_cluster_records_for_cluster():
         "ORDER BY (match_score IS NULL) ASC, match_score DESC, id ASC "
         "LIMIT ? OFFSET ?"
     )
-    params: List[Any] = [app_user_id, model_id, cluster_id, limit, offset]
 
     try:
         with get_conn() as conn:
-            cur = conn.execute(sql, tuple(params))
+            cur = conn.execute(sql, (app_user_id, model_id, cluster_id, limit, offset))
             rows = cur.fetchall()
     except Exception as e:
         return (

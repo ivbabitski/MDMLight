@@ -450,7 +450,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
         </div>
 
         <div className="mdmDialog__body" style={{ alignContent: "start", gridAutoRows: "max-content" }}>
-          <div className="mdmRecordsHead" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div className="mdmRecordsHead mdmModelsHead" style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 10, flexWrap: "wrap" }}>
             <div style={{ minWidth: 240, flex: "1 1 240px" }}>
               <div style={{ color: "var(--muted)", fontSize: 13 }}>
                 {loading ? "Loading..." : error ? error : runHeaderSuffix}
@@ -458,7 +458,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
             </div>
 
 
-            <div className="mdmInputWithIcon" style={{ flex: "0 0 340px", maxWidth: "44vw", minWidth: 220 }}>
+            <div className="mdmInputWithIcon" style={{ flex: "0 0 340px", maxWidth: "44vw", minWidth: 220, marginLeft: "auto" }}>
               <input
                 className="mdmInput mdmInput--withIcon"
                 type="search"
@@ -481,7 +481,7 @@ export default function MdmModelsOverlay({ open, onClose, currentUser, onRequire
               ) : null}
             </div>
 
-            <div className="mdmBtnGroup" style={{ marginLeft: "auto" }}>
+            <div className="mdmBtnGroup">
               <button className="mdmBtn mdmBtn--soft" type="button" onClick={loadModels} disabled={loading}>
                 Refresh
               </button>

@@ -44,19 +44,24 @@ def conservative_similarity(a: Optional[str], b: Optional[str]) -> Tuple[float, 
 
     Returns: (similarity in [0..1], distance)
     Notes:
-      - If both empty -> sim=1
-      - If one empty -> sim=0
+      - If either value is missing/empty -> sim=0 (including both empty)
       - Clamps sim to [0,1] (so you never get negative %)
     """
     a = "" if a is None else str(a)
     b = "" if b is None else str(b)
+
+    # Missing value rule: missing/blank contributes 0 similarity for this field.
+    if len(a) == 0 or len(b) == 0:
+        if len(a) == 0 and len(b) == 0:
+            return 0.0, 0
+        return 0.0, max(len(a), len(b))
 
     if a == b:
         return 1.0, 0
 
     min_len = min(len(a), len(b))
     if min_len == 0:
-        # One is empty, the other isn't (since a != b here)
+        # One is empty, the other isn't
         return 0.0, max(len(a), len(b))
 
     d = levenshtein_distance(a, b)

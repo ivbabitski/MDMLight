@@ -1,6 +1,21 @@
 import os
-from flask import Flask
+import sys
+from pathlib import Path
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+APP_ROOT = Path(__file__).resolve().parent
+APP_ROOT_STR = str(APP_ROOT)
+
+if APP_ROOT_STR in sys.path:
+    sys.path.remove(APP_ROOT_STR)
+sys.path.insert(0, APP_ROOT_STR)
+
+if "services" in sys.modules:
+    _mod = sys.modules["services"]
+    _mod_file = getattr(_mod, "__file__", None)
+    if not _mod_file or not str(_mod_file).startswith(APP_ROOT_STR + os.sep):
+        del sys.modules["services"]
 
 DB_PATH = os.environ.get("DB_PATH", "/data/app.db")
 STORAGE_PATH = os.environ.get("STORAGE_PATH", "/data/storage")
@@ -13,7 +28,7 @@ def create_app() -> Flask:
     CORS(
         app,
         resources={r"/*": {"origins": "*"}},
-        allow_headers=["Content-Type", "X-User-Id"],
+        allow_headers=["Content-Type", "Authorization", "X-User-Id"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
 
@@ -36,7 +51,7 @@ def create_app() -> Flask:
 
 
     app.register_blueprint(system_bp)
-    app.register_blueprint(ingestion_bp)
+    app.register_blueprint(ingestion_bp, url_prefix="/api")
     app.register_blueprint(csv_upload_bp)
     app.register_blueprint(match_bp)
     app.register_blueprint(auth_bp)

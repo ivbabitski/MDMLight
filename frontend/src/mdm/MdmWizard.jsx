@@ -308,7 +308,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     setCsvUploadRows(0);
     setRecordCount(12500);
 
-    setApiEndpoint("http://localhost:5000/api/ingest");
+    setApiEndpoint("http://localhost:5000/api/ingest/api");
     setApiToken(randomToken(16));
     setCopied(null);
     setShowToken(false);
@@ -323,6 +323,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     setMatchFieldPick("");
     setRunModelAfterSave(false);
     setWeightDraftById({});
+    setWeightsTouched(false);
 
     setMatchThreshold(0.85);
     setPossibleThreshold(0.7);
@@ -387,7 +388,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
 
   // API key mode (inbound)
-  const [apiEndpoint, setApiEndpoint] = useState("http://localhost:5000/api/ingest");
+  const [apiEndpoint, setApiEndpoint] = useState("http://localhost:5000/api/ingest/api");
   const [apiToken, setApiToken] = useState(() => randomToken(16));
   const [copied, setCopied] = useState(null); // "endpoint" | "token" | null
   const [showToken, setShowToken] = useState(false);
@@ -408,6 +409,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
   const [runModelAfterSave, setRunModelAfterSave] = useState(false);
   const [weightDraftById, setWeightDraftById] = useState(() => ({}));
+  const [weightsTouched, setWeightsTouched] = useState(false);
 
   // Step 3 — model
   const [matchThreshold, setMatchThreshold] = useState(0.85);
@@ -434,10 +436,12 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
 
   const [specificValueError, setSpecificValueError] = useState("");
   const specificValueDragFromRef = useRef(null);
+  const prevMatchFieldKeyRef = useRef("");
 
   // computed
   const includedFields = useMemo(() => fields.filter((f) => f.include), [fields]);
   const keyField = useMemo(() => fields.find((f) => f.key), [fields]);
+
 
   const eligibleMatchFields = useMemo(
     () =>
@@ -479,12 +483,33 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
     return out;
   }
 
-  // auto equalize weights when match fields selection changes
+  // auto equalize weights when match fields selection changes (until user edits weights)
   useEffect(() => {
-    setWeightDraftById({});
+    const keyChanged = prevMatchFieldKeyRef.current !== matchFieldKey;
+    prevMatchFieldKeyRef.current = matchFieldKey;
+
+    if (keyChanged) {
+      setWeightDraftById({});
+    }
+
     const ids = matchFields.map((f) => f.id);
     const n = ids.length;
-    if (n === 0) return;
+
+    if (n === 0) {
+      if (weightsTouched) setWeightsTouched(false);
+      return;
+    }
+
+    // Once the user edits any weight, stop auto-rebalancing.
+    if (weightsTouched) {
+      if (n === 1) {
+        const onlyId = ids[0];
+        setFields((prev) =>
+          prev.map((f) => (f.id === onlyId ? { ...f, weight: 1 } : f))
+        );
+      }
+      return;
+    }
 
     const targetPcts = equalWeightPcts(n);
 
@@ -509,7 +534,7 @@ export default function MdmWizard({ open, onClose, actor: actorProp, apiBaseUrl 
         return { ...f, weight: targetPcts[idx] / 100 };
       });
     });
-  }, [matchFieldKey]);
+  }, [matchFieldKey, weightsTouched]);
 
 
   // keep matchFieldCodes valid (must remain: flex + included + labeled)
@@ -607,6 +632,8 @@ const sourceOk =
   const step2Ok = Boolean(keyField) && eligibleMatchFields.length > 0;
 
   const step3Ok = matchFieldCodes.length > 0;
+  const weightsOk = totalWeightPct === 100;
+
 
 
   const actor = useMemo(() => {
@@ -655,7 +682,7 @@ function applyLoadedModelConfig(modelId, cfg) {
 
   setRecordCount(Number(cfg?.recordCount || 0) || 0);
 
-  setApiEndpoint(safe(cfg?.apiEndpoint) || "http://localhost:5000/api/ingest");
+  setApiEndpoint(safe(cfg?.apiEndpoint) || "http://localhost:5000/api/ingest/api");
   setApiToken(safe(cfg?.apiToken));
 
   setAiExceptions(Boolean(cfg?.aiExceptions));
@@ -697,6 +724,8 @@ function applyLoadedModelConfig(modelId, cfg) {
       : []
   );
   setMatchFieldPick("");
+  setWeightDraftById({});
+  setWeightsTouched(true);
 
   // Fields: merge defaults with loaded fields (by code)
   const loadedFields = Array.isArray(cfg?.fields) ? cfg.fields : [];
@@ -1007,9 +1036,48 @@ useEffect(() => {
   }
 
 
-  function rotateToken() {
-    setApiToken(randomToken(16));
+  async function rotateToken() {
     setCopied(null);
+
+    const userId = getUserId();
+    if (!userId) {
+      setSaveError("No user id found in authStorage (treat as logged out)");
+      return;
+    }
+
+    const mid = String(editingModelId || "").trim();
+    if (!mid) {
+      setSaveError("Save the model first before rotating an API token.");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${apiBase}/api/api-keys/rotate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Id": String(userId),
+        },
+        body: JSON.stringify({ model_id: mid, name: domainModelName || null }),
+      });
+
+      const out = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setSaveError(out?.error || `Token rotate failed (${res.status})`);
+        return;
+      }
+
+      const token = String(out?.token || "").trim();
+      if (!token) {
+        setSaveError("Token rotate succeeded but no token was returned by the API.");
+        return;
+      }
+
+      setApiToken(token);
+    } catch (e) {
+      setSaveError(String(e?.message || e));
+    }
   }
 
   function pickCsv() {
@@ -1154,6 +1222,7 @@ useEffect(() => {
   }
 
   function setWeightPct(id, pct) {
+    setWeightsTouched(true);
     setFields((prev) => {
       const ids = matchFieldCodes
         .map((code) => prev.find((f) => f.code === code)?.id)
@@ -1163,58 +1232,9 @@ useEffect(() => {
       const n = ids.length;
       if (n === 1) return prev.map((f) => (f.id === id ? { ...f, weight: 1 } : f));
 
-      const others = ids.filter((x) => x !== id);
-      const minEach = 1;
+      const targetPct = Math.max(1, Math.min(100, Math.round(Number(pct) || 0)));
 
-      const maxPct = 100 - minEach * others.length;
-      const targetPct = Math.max(minEach, Math.min(maxPct, Math.round(Number(pct) || 0)));
-
-      const remaining = 100 - targetPct;
-      const extraPool = remaining - minEach * others.length;
-
-      const baseWeights = others.map((oid) => {
-        const ff = prev.find((x) => x.id === oid);
-        const w = Number(ff?.weight) || 0;
-        return Math.max(0, Math.round(w * 100));
-      });
-
-      const sumBase = baseWeights.reduce((a, b) => a + b, 0);
-
-      let extras = new Array(others.length).fill(0);
-
-      if (others.length > 0) {
-        if (sumBase <= 0) {
-          const base = Math.floor(extraPool / others.length);
-          let rem = extraPool - base * others.length;
-          extras = extras.map((_, i) => base + (i < rem ? 1 : 0));
-        } else {
-          const raws = baseWeights.map((b) => (b * extraPool) / sumBase);
-          const floors = raws.map((r) => Math.floor(r));
-          let rem = extraPool - floors.reduce((a, b) => a + b, 0);
-
-          const order = raws
-            .map((r, i) => ({ i, frac: r - floors[i] }))
-            .sort((a, b) => b.frac - a.frac)
-            .map((x) => x.i);
-
-          const out = [...floors];
-          for (let k = 0; k < order.length && rem > 0; k++) {
-            out[order[k]] = out[order[k]] + 1;
-            rem--;
-          }
-
-          extras = out;
-        }
-      }
-
-      const pctMap = new Map();
-      pctMap.set(id, targetPct);
-      others.forEach((oid, i) => pctMap.set(oid, minEach + extras[i]));
-
-      return prev.map((f) => {
-        if (!pctMap.has(f.id)) return f;
-        return { ...f, weight: pctMap.get(f.id) / 100 };
-      });
+      return prev.map((f) => (f.id === id ? { ...f, weight: targetPct / 100 } : f));
     });
   }
 
@@ -1294,6 +1314,11 @@ useEffect(() => {
       setSaveError("Select at least 1 match field");
       return;
     }
+    if (!weightsOk) {
+      setSaveError("Total weight must be 100%");
+      return;
+    }
+
 
     if (!advanced && globalRule === "specific_value_priority") {
       const invalid = specificValuePriority.some((row) => {
@@ -2280,9 +2305,11 @@ useEffect(() => {
                                   value={weightDraft !== undefined ? weightDraft : weightPct}
                                   disabled={matchFields.length === 1}
                                   onChange={(e) => {
+                                    setWeightsTouched(true);
                                     setWeightDraftById((prev) => ({ ...prev, [f.id]: e.target.value }));
                                   }}
                                   onKeyDown={(e) => {
+
                                     if (e.key === "Enter") e.currentTarget.blur();
                                   }}
                                   onBlur={(e) => {
@@ -2372,6 +2399,13 @@ useEffect(() => {
                 <span className="mdmMono">Select at least 1 match field</span>
               </>
             )}
+
+            {step === 2 && step3Ok && !weightsOk && (
+              <>
+                {" • "}
+                <span className="mdmMono">Total weight must be 100%</span>
+              </>
+            )}
           </div>
 
 
@@ -2407,7 +2441,7 @@ useEffect(() => {
                 className="mdmBtn mdmBtn--primary"
                 type="button"
                 onClick={finishWizard}
-                disabled={savingModel || !step3Ok}
+                disabled={savingModel || !step3Ok || !weightsOk}
               >
                 {savingModel ? "Saving..." : "Finish setup"}
               </button>

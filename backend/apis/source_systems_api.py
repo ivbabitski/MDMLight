@@ -26,7 +26,6 @@ def _require_app_user_id():
     # Keep same behavior as mdm_model_api.py
     v = (
         request.headers.get("X-User-Id")
-        or request.headers.get("X-App-User-Id")
         or request.args.get("app_user_id")
         or ""
     )

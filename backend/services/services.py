@@ -42,7 +42,18 @@ __all__ = [
     "mdm_source_systems_list",
     "recon_cluster_list_records",
     "golden_record_list_records",
+    "source_input_ingest_batch_from_fields_array",
     "source_input_ingest_batch",
+    "mdm_model_list",
+    "mdm_model_get",
+    "mdm_model_create",
+    "mdm_model_update",
+    "mdm_model_delete",
+    "matching_summary_get",
+    "api_key_rotate",
+    "api_key_revoke",
+    "api_ingest_api",
+    "api_batch_get",
 ]
 
 
@@ -1367,6 +1378,8 @@ def recon_cluster_list_cluster_records(
                 "source_id",
                 "match_status",
                 "match_score",
+                "match_threshold",
+                "exceptions_threshold",
                 "created_at",
                 "created_by",
                 "updated_at",
@@ -1385,6 +1398,8 @@ def recon_cluster_list_cluster_records(
                 "source_id",
                 "match_status",
                 "match_score",
+                "match_threshold",
+                "exceptions_threshold",
                 "created_at",
                 "created_by",
                 "updated_at",
@@ -1406,9 +1421,10 @@ def recon_cluster_list_cluster_records(
                 params = [app_user_id, mid]
 
                 if status_mode_norm == "exceptions":
-                    where_parts.append("lower(coalesce(match_status, 'match')) <> 'match'")
+                    where_parts.append("lower(trim(coalesce(match_status, ''))) = 'exception'")
 
                 where_sql = " AND ".join(where_parts)
+
 
                 sql = (
                     f"SELECT {', '.join(cols)} "
@@ -1670,7 +1686,8 @@ def recon_cluster_list_records(
     if status_v == "match":
         sql += " AND (match_status IS NULL OR lower(match_status) = 'match')"
     elif status_v in {"exception", "exceptions"}:
-        sql += " AND (match_status IS NOT NULL AND lower(match_status) <> 'match')"
+        sql += " AND (lower(trim(coalesce(match_status, ''))) = 'exception')"
+
 
     sql += (
         " ORDER BY cluster_id ASC, (match_score IS NULL) ASC, match_score DESC"
@@ -1858,6 +1875,170 @@ def golden_record_list_records(
 # Batch ingestion service (moved from ingestion_api.py)
 # ---------------------------------------------------------------------------
 
+def source_input_ingest_batch_from_fields_array(
+    *,
+    app_user_id: int,
+    source_name: Any,
+    actor: Any,
+    rows: Any,
+    headers: Any = None,
+    max_rows_per_call: int = 5000,
+) -> Dict[str, Any]:
+    import sqlite3
+
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    if not source_name or not isinstance(source_name, str):
+        raise ValidationError("source_name is required (string)")
+    sname = str(source_name).strip()
+    if not sname:
+        raise ValidationError("source_name is required (string)")
+
+    if not actor or not isinstance(actor, str):
+        raise ValidationError("actor is required (string)")
+    actor_v = str(actor).strip()
+    if not actor_v:
+        raise ValidationError("actor is required (string)")
+
+    if not isinstance(rows, list) or len(rows) == 0:
+        raise ValidationError("rows must be a non-empty array")
+
+    if not isinstance(max_rows_per_call, int):
+        raise ValidationError("max_rows_per_call must be an integer")
+    if max_rows_per_call <= 0:
+        raise ValidationError("max_rows_per_call must be >= 1")
+
+    if len(rows) > max_rows_per_call:
+        raise ValidationError(f"too many rows: {len(rows)} (max {max_rows_per_call})")
+
+    if headers is not None and not isinstance(headers, list):
+        raise ValidationError("headers must be an array (optional)")
+
+    init_source_input()
+
+    f_cols = [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+    cols = [
+        "app_user_id",
+        "source_name",
+        "source_id",
+        *f_cols,
+        "created_at",
+        "created_by",
+        "updated_at",
+        "updated_by",
+    ]
+
+    placeholders = ",".join(["?"] * (3 + 20 + 2))
+    update_set = ", ".join([f"{c}=excluded.{c}" for c in f_cols])
+
+    insert_sql = f"""
+    INSERT INTO source_input (
+      {",".join(cols)}
+    ) VALUES (
+      {placeholders},
+      NULL, NULL
+    )
+    ON CONFLICT(app_user_id, source_name, source_id) DO UPDATE SET
+      {update_set},
+      updated_at=?,
+      updated_by=?
+    WHERE source_input.app_user_id IS NULL OR source_input.app_user_id = excluded.app_user_id;
+    """
+
+    now = _utc_now_iso()
+
+    samples = [[] for _ in range(20)]
+    max_field_len = 0
+    params = []
+
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            raise ValidationError(f"row {i} must be an object")
+
+        source_id = r.get("source_id")
+        fields = r.get("fields")
+
+        if not source_id or not isinstance(source_id, str):
+            raise ValidationError(f"row {i}: source_id is required (string)")
+        source_id_v = str(source_id).strip()
+        if not source_id_v:
+            raise ValidationError(f"row {i}: source_id is required (string)")
+
+        if not isinstance(fields, list):
+            raise ValidationError(f"row {i}: fields is required (array length <= 20)")
+        if len(fields) > 20:
+            raise ValidationError(f"row {i}: fields length is {len(fields)} (max 20)")
+
+        if len(fields) > max_field_len:
+            max_field_len = len(fields)
+
+        padded = (fields + [None] * 20)[:20]
+        cleaned = []
+        for j, v in enumerate(padded):
+            if v is None:
+                cleaned.append(None)
+                continue
+            sv = str(v).strip()
+            cleaned.append(sv if sv else None)
+            if cleaned[-1] is not None and len(samples[j]) < 50:
+                samples[j].append(cleaned[-1])
+
+        params.append(
+            (
+                app_user_id,
+                sname,
+                source_id_v,
+                *cleaned,
+                now,
+                actor_v,
+                now,
+                actor_v,
+            )
+        )
+
+    try:
+        with get_conn() as conn:
+            conn.executemany(insert_sql, params)
+    except sqlite3.OperationalError as e:
+        raise ServiceError("sqlite error", payload={"detail": str(e)})
+    except Exception as ex:
+        raise ServiceError(
+            "ingestion failed",
+            payload={"detail": f"{ex.__class__.__name__}: {ex}"},
+        )
+
+    field_count = min(20, max_field_len)
+
+    header_list = []
+    if isinstance(headers, list) and headers:
+        header_list = [str(h or "").strip() for h in headers][:field_count]
+        while len(header_list) < field_count:
+            header_list.append(f"f{len(header_list) + 1:02d}")
+    else:
+        header_list = [f"f{j + 1:02d}" for j in range(field_count)]
+
+    schema_fields = []
+    for j in range(field_count):
+        schema_fields.append(
+            {
+                "code": f"f{j + 1:02d}",
+                "header": header_list[j],
+                "type": _csv_best_type(samples[j]),
+            }
+        )
+
+    return {
+        "ok": True,
+        "source_name": sname,
+        "received_rows": len(rows),
+        "upserted_rows": len(rows),
+        "max_rows_per_call": max_rows_per_call,
+        "schema": {"fields": schema_fields},
+    }
+
 def source_input_ingest_batch(
     *,
     app_user_id: int,
@@ -2028,6 +2209,1475 @@ def source_input_ingest_batch(
         "upserted_rows": len(rows),
         "max_rows_per_call": max_rows_per_call,
         "schema": {"fields": schema_fields},
+    }
+
+
+def source_input_ingest_batch_from_fields_array(
+    *,
+    app_user_id: int,
+    source_name: str,
+    actor: str,
+    rows: List[Dict[str, Any]],
+    headers: Optional[List[Any]] = None,
+    max_rows_per_call: int = 5000,
+) -> Dict[str, Any]:
+    import sqlite3
+
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    sname = str(source_name or "").strip()
+    if not sname:
+        raise ValidationError("source_name is required")
+
+    actor_v = str(actor or "").strip()
+    if not actor_v:
+        raise ValidationError("actor is required")
+
+    if not isinstance(rows, list):
+        raise ValidationError("rows must be a list")
+
+    if not isinstance(max_rows_per_call, int):
+        raise ValidationError("max_rows_per_call must be an integer")
+    if max_rows_per_call <= 0:
+        raise ValidationError("max_rows_per_call must be >= 1")
+
+    if len(rows) > max_rows_per_call:
+        raise ValidationError(
+            f"too many rows (max {max_rows_per_call})",
+            payload={"max_rows_per_call": max_rows_per_call},
+        )
+
+    if headers is not None and not isinstance(headers, list):
+        raise ValidationError("headers must be an array (optional)")
+
+    init_source_input()
+
+    now = _utc_now_iso()
+
+    samples: List[List[str]] = [[] for _ in range(20)]
+    max_field_len = 0
+
+    to_insert = []
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            raise ValidationError(f"row {i + 1} must be an object")
+
+        source_id = str(r.get("source_id") or "").strip()
+        if not source_id:
+            raise ValidationError(f"row {i + 1}: source_id is required")
+
+        fields = r.get("fields")
+        if not isinstance(fields, list):
+            raise ValidationError(f"row {i + 1}: fields is required (array length <= 20)")
+        if len(fields) > 20:
+            raise ValidationError(f"row {i + 1}: fields length is {len(fields)} (max 20)")
+
+        if len(fields) > max_field_len:
+            max_field_len = len(fields)
+
+        padded = (fields + [None] * 20)[:20]
+
+        cleaned = []
+        for j, v in enumerate(padded):
+            if v is None:
+                cleaned.append(None)
+                continue
+
+            s = str(v).strip()
+            if not s:
+                cleaned.append(None)
+                continue
+
+            cleaned.append(s)
+            if len(samples[j]) < 50:
+                samples[j].append(s)
+
+        to_insert.append(
+            (
+                app_user_id,
+                sname,
+                source_id,
+                *cleaned,
+                now,
+                actor_v,
+                now,
+                actor_v,
+            )
+        )
+
+    f_cols = [f"f{i:02d}" for i in range(1, 21)]
+    f_cols_sql = ", ".join(f_cols)
+    f_placeholders = ",".join(["?"] * 20)
+
+    update_set = ", ".join([f"{c}=excluded.{c}" for c in f_cols])
+
+    insert_sql = f"""
+    INSERT INTO source_input (
+      app_user_id,
+      source_name,
+      source_id,
+      {f_cols_sql},
+      created_at,
+      created_by,
+      updated_at,
+      updated_by
+    ) VALUES (
+      ?,
+      ?,
+      ?,
+      {f_placeholders},
+      ?,
+      ?,
+      NULL,
+      NULL
+    )
+    ON CONFLICT(app_user_id, source_name, source_id) DO UPDATE SET
+      {update_set},
+      updated_at=?,
+      updated_by=?
+    """
+
+    try:
+        with get_conn() as conn:
+            conn.executemany(insert_sql, to_insert)
+            conn.commit()
+    except sqlite3.OperationalError as e:
+        raise ServiceError("sqlite error", payload={"detail": str(e)})
+    except Exception as ex:
+        raise ServiceError(
+            "ingestion failed",
+            payload={"detail": f"{ex.__class__.__name__}: {ex}"},
+        )
+
+    field_count = min(20, max_field_len)
+
+    header_list: List[str] = []
+    if isinstance(headers, list) and headers and field_count > 0:
+        header_list = [str(h or "").strip() for h in headers][:field_count]
+        while len(header_list) < field_count:
+            header_list.append(f"f{len(header_list) + 1:02d}")
+    else:
+        header_list = [f"f{j + 1:02d}" for j in range(field_count)]
+
+    schema_fields = []
+    for j in range(field_count):
+        schema_fields.append(
+            {
+                "code": f"f{j + 1:02d}",
+                "header": header_list[j],
+                "type": _csv_best_type(samples[j]),
+            }
+        )
+
+    return {
+        "ok": True,
+        "source_name": sname,
+        "received_rows": len(rows),
+        "upserted_rows": len(rows),
+        "max_rows_per_call": max_rows_per_call,
+        "schema": {"fields": schema_fields},
+    }
+
+
+# ---------------------------------------------------------------------------
+# MDM model services (moved from mdm_model_api.py)
+# ---------------------------------------------------------------------------
+
+
+def _mdm_model_imports():
+    try:
+        from db.sqlite_db import (
+            init_mdm_models,
+            create_mdm_model,
+            list_mdm_models,
+            get_mdm_model_by_id,
+            update_mdm_model,
+            soft_delete_mdm_model,
+        )
+    except Exception:
+        from sqlite_db import (
+            init_mdm_models,
+            create_mdm_model,
+            list_mdm_models,
+            get_mdm_model_by_id,
+            update_mdm_model,
+            soft_delete_mdm_model,
+        )
+
+    return (
+        init_mdm_models,
+        create_mdm_model,
+        list_mdm_models,
+        get_mdm_model_by_id,
+        update_mdm_model,
+        soft_delete_mdm_model,
+    )
+
+
+def _mdm_assert_model_owner(model_row: Dict[str, Any], app_user_id: int) -> None:
+    owner_id = model_row.get("owner_user_id")
+    model_app_user_id = model_row.get("app_user_id")
+
+    if owner_id is not None and int(owner_id) != int(app_user_id):
+        raise ForbiddenError("model does not belong to user")
+    if model_app_user_id is not None and int(model_app_user_id) != int(app_user_id):
+        raise ForbiddenError("model does not belong to user")
+
+
+def _slugify(s: str) -> str:
+    import re
+
+    x = str(s or "").strip().lower()
+    x = re.sub(r"[^a-z0-9]+", "_", x)
+    x = x.strip("_")
+    return x
+
+
+def _to_float(v: Any, default: float = 0.0) -> float:
+    try:
+        if v is None:
+            return float(default)
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).strip()
+        if not s:
+            return float(default)
+        return float(s)
+    except Exception:
+        return float(default)
+
+
+def _is_field_obj(x: Any) -> bool:
+    if not isinstance(x, dict):
+        return False
+    code = str(x.get("code") or "").strip()
+    return bool(code)
+
+
+def _clean_code(s: Any) -> str:
+    x = str(s or "").strip()
+    return x
+
+
+def _clean_label(s: Any) -> str:
+    x = str(s or "").strip()
+    return x
+
+
+def _normalize_config(cfg: Dict[str, Any], model_name: str) -> Dict[str, Any]:
+    """
+    Canonicalize model config to the app's expected structure.
+    Raises ValueError on invalid input.
+    """
+    if not isinstance(cfg, dict):
+        raise ValueError("config must be an object")
+
+    out: Dict[str, Any] = {}
+
+    out["domainModelName"] = str(
+        cfg.get("domainModelName") or cfg.get("model_name") or model_name or ""
+    ).strip()
+    if not out["domainModelName"]:
+        raise ValueError("config.domainModelName is required")
+
+    config_obj = cfg.get("config")
+    if config_obj is None:
+        config_obj = {}
+    if not isinstance(config_obj, dict):
+        raise ValueError("config.config must be an object")
+
+    fields = config_obj.get("fields")
+    if fields is None:
+        fields = cfg.get("fields")
+    if fields is None:
+        fields = []
+    if not isinstance(fields, list):
+        raise ValueError("config.fields must be an array")
+
+    clean_fields: List[Dict[str, Any]] = []
+    seen_codes = set()
+    for f in fields:
+        if not _is_field_obj(f):
+            continue
+        code = _clean_code(f.get("code"))
+        if not code:
+            continue
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        label = _clean_label(f.get("label") or code)
+        clean_fields.append(
+            {
+                "code": code,
+                "label": label,
+                "type": str(f.get("type") or "text"),
+            }
+        )
+
+    match_rules = config_obj.get("matchRules")
+    if match_rules is None:
+        match_rules = cfg.get("matchRules")
+    if match_rules is None:
+        match_rules = []
+    if not isinstance(match_rules, list):
+        raise ValueError("config.matchRules must be an array")
+
+    clean_rules: List[Dict[str, Any]] = []
+    for r in match_rules:
+        if not isinstance(r, dict):
+            continue
+        field = _clean_code(r.get("field"))
+        if not field:
+            continue
+        clean_rules.append(
+            {
+                "field": field,
+                "weight": _to_float(r.get("weight"), 0.0),
+                "on": bool(r.get("on", True)),
+                "method": str(r.get("method") or ""),
+                "threshold": _to_float(r.get("threshold"), 0.0),
+            }
+        )
+
+    survivorship = config_obj.get("survivorship")
+    if survivorship is None:
+        survivorship = cfg.get("survivorship")
+    if survivorship is None:
+        survivorship = {}
+    if not isinstance(survivorship, dict):
+        raise ValueError("config.survivorship must be an object")
+
+    surv_mode = survivorship.get("mode")
+    if surv_mode is None:
+        surv_mode = "best"
+    surv_mode = str(surv_mode or "").strip() or "best"
+
+    global_rule = survivorship.get("globalRule")
+    if global_rule is None:
+        global_rule = "best"
+    global_rule = str(global_rule or "").strip() or "best"
+
+    surv_rules = survivorship.get("rules")
+    if surv_rules is None:
+        surv_rules = []
+    if not isinstance(surv_rules, list):
+        raise ValueError("survivorship.rules must be an array")
+
+    clean_surv_rules: List[Dict[str, Any]] = []
+    for r in surv_rules:
+        if not isinstance(r, dict):
+            continue
+        field = str(r.get("field") or "").strip()
+        if not field:
+            continue
+        rule = str(r.get("rule") or "").strip() or global_rule
+        sources = r.get("sources")
+        clean_surv_rules.append(
+            {
+                "field": field,
+                "rule": rule,
+                "sources": sources if isinstance(sources, list) else [],
+            }
+        )
+
+    out["config"] = {
+        "fields": clean_fields,
+        "matchRules": clean_rules,
+        "survivorship": {
+            "mode": surv_mode,
+            "globalRule": global_rule,
+            "rules": clean_surv_rules,
+        },
+    }
+
+    return out
+
+
+def mdm_model_list(*, app_user_id: int, include_deleted: bool = False) -> Dict[str, Any]:
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+    if not isinstance(include_deleted, bool):
+        raise ValidationError("include_deleted must be a boolean")
+
+    init_mdm_models, _, list_mdm_models, _, _, _ = _mdm_model_imports()
+    init_mdm_models()
+
+    rows = list_mdm_models(include_deleted=include_deleted) or []
+    models: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        try:
+            _mdm_assert_model_owner(d, app_user_id)
+        except ForbiddenError:
+            continue
+        models.append(d)
+
+    return {"ok": True, "models": models}
+
+
+def mdm_model_get(*, app_user_id: int, model_id: str) -> Dict[str, Any]:
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    mid = str(model_id or "").strip()
+    if not mid:
+        raise ValidationError("model_id is required")
+
+    init_mdm_models, _, _, get_mdm_model_by_id, _, _ = _mdm_model_imports()
+    init_mdm_models()
+
+    m = get_mdm_model_by_id(mid, include_deleted=False)
+    if not m:
+        raise NotFoundError("model not found")
+
+    d = dict(m)
+    _mdm_assert_model_owner(d, app_user_id)
+
+    try:
+        d["config"] = json.loads(d.get("config_json") or "{}")
+    except Exception:
+        d["config"] = None
+
+    return {"ok": True, "model": d}
+
+
+def mdm_model_create(
+    *,
+    app_user_id: int,
+    actor: str = "api",
+    model_name: str = "",
+    model_key: str = "",
+    config: Any = None,
+) -> Dict[str, Any]:
+    import sqlite3
+
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    actor_v = str(actor or "").strip() or "api"
+
+    name_v = str(model_name or "").strip()
+    key_v = str(model_key or "").strip()
+
+    cfg = config
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except Exception:
+            raise ValidationError("config must be valid JSON")
+
+    if cfg is None:
+        cfg = {}
+
+    if not isinstance(cfg, dict):
+        raise ValidationError("config must be an object")
+
+    if not name_v:
+        name_v = str(cfg.get("domainModelName") or "").strip()
+
+    if not name_v:
+        raise ValidationError("model_name is required (or provide config.domainModelName)")
+
+    if not key_v:
+        key_v = _slugify(name_v)
+
+    if not key_v:
+        raise ValidationError("model_key could not be derived")
+
+    try:
+        cfg_norm = _normalize_config(cfg, name_v)
+    except ValueError as ex:
+        raise ValidationError(str(ex))
+
+    config_json = json.dumps(cfg_norm, ensure_ascii=False, separators=(",", ":"))
+    now = _utc_now_iso()
+
+    init_mdm_models, create_mdm_model, _, _, _, _ = _mdm_model_imports()
+    init_mdm_models()
+
+    try:
+        new_id = create_mdm_model(
+            model_key=key_v,
+            model_name=name_v,
+            config_json=config_json,
+            owner_user_id=app_user_id,
+            actor=actor_v,
+            now=now,
+        )
+    except sqlite3.IntegrityError:
+        raise ConflictError("active model_name or model_key already exists")
+    except Exception as ex:
+        raise ServiceError("create model failed", payload={"detail": f"{ex.__class__.__name__}: {ex}"})
+
+    return {"ok": True, "id": str(new_id), "model_key": key_v, "model_name": name_v}
+
+
+def mdm_model_update(
+    *,
+    app_user_id: int,
+    actor: str = "api",
+    model_id: str,
+    model_name: str = "",
+    config: Any = None,
+) -> Dict[str, Any]:
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    mid = str(model_id or "").strip()
+    if not mid:
+        raise ValidationError("model_id is required")
+
+    actor_v = str(actor or "").strip() or "api"
+
+    name_v = str(model_name or "").strip()
+    cfg = config
+
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except Exception:
+            raise ValidationError("config must be valid JSON")
+
+    if cfg is not None and not isinstance(cfg, dict):
+        raise ValidationError("config must be an object")
+
+    if not name_v and cfg is None:
+        raise ValidationError("nothing to update")
+
+    init_mdm_models, _, _, get_mdm_model_by_id, update_mdm_model, _ = _mdm_model_imports()
+    init_mdm_models()
+
+    existing = get_mdm_model_by_id(mid, include_deleted=True)
+    if not existing:
+        raise NotFoundError("model not found")
+
+    exd = dict(existing)
+    _mdm_assert_model_owner(exd, app_user_id)
+
+    config_json = None
+    if cfg is not None:
+        use_name = name_v or str(cfg.get("domainModelName") or "").strip()
+        if not use_name:
+            raise ValidationError("model_name is required (or provide config.domainModelName)")
+        try:
+            cfg_norm = _normalize_config(cfg, use_name)
+        except ValueError as ex:
+            raise ValidationError(str(ex))
+        config_json = json.dumps(cfg_norm, ensure_ascii=False, separators=(",", ":"))
+
+    now = _utc_now_iso()
+
+    ok = update_mdm_model(
+        model_id=mid,
+        model_name=name_v if name_v else None,
+        config_json=config_json,
+        actor=actor_v,
+        now=now,
+    )
+    if not ok:
+        raise NotFoundError("model not found")
+
+    return {"ok": True, "message": "model updated"}
+
+
+def mdm_model_delete(*, app_user_id: int, actor: str = "api", model_id: str = "") -> Dict[str, Any]:
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    mid = str(model_id or "").strip()
+    if not mid:
+        raise ValidationError("model_id is required")
+
+    actor_v = str(actor or "").strip() or "api"
+    now = _utc_now_iso()
+
+    init_mdm_models, _, _, get_mdm_model_by_id, _, soft_delete_mdm_model = _mdm_model_imports()
+    init_mdm_models()
+
+    existing = get_mdm_model_by_id(mid, include_deleted=True)
+    if not existing:
+        raise NotFoundError("model not found")
+
+    exd = dict(existing)
+    _mdm_assert_model_owner(exd, app_user_id)
+
+    ok = soft_delete_mdm_model(model_id=mid, actor=actor_v, now=now)
+    if not ok:
+        raise NotFoundError("model not found")
+
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Matching summary service (moved from matching_summary_api.py)
+# ---------------------------------------------------------------------------
+
+SURVIVORSHIP_LABELS = {
+    "best": "Best Available",
+    "recency": "Most Recent",
+    "source_priority": "Source Priority",
+    "most_common": "Most Common",
+}
+
+
+def _survivorship_rule_label(rule: str) -> str:
+    r = str(rule or "").strip().lower()
+    return SURVIVORSHIP_LABELS.get(r, r or "best")
+
+
+def _init_matching_summary_tables() -> None:
+    try:
+        from db.sqlite_db import (
+            init_mdm_models,
+            init_match_job,
+            init_cluster_map,
+            init_golden_record,
+            init_match_exception,
+        )
+    except Exception:
+        from sqlite_db import (
+            init_mdm_models,
+            init_match_job,
+            init_cluster_map,
+            init_golden_record,
+            init_match_exception,
+        )
+
+    init_source_input()
+    init_mdm_models()
+    _init_recon_cluster()
+    init_match_job()
+    init_cluster_map()
+    init_golden_record()
+    init_match_exception()
+
+
+def matching_summary_get(*, app_user_id: int, model_id: str) -> Dict[str, Any]:
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    mid = str(model_id or "").strip()
+    if not mid:
+        raise ValidationError("model_id is required")
+
+    try:
+        _init_matching_summary_tables()
+    except Exception as ex:
+        raise ServiceError(
+            "init failed",
+            payload={"detail": f"{ex.__class__.__name__}: {ex}"},
+        )
+
+    with get_conn() as conn:
+        db_file = _get_db_file(conn)
+
+        model_row = conn.execute(
+            """
+            SELECT id, model_name, config_json, owner_user_id, app_user_id
+            FROM mdm_models
+            WHERE id = ?
+              AND deleted_at IS NULL
+            LIMIT 1
+            """,
+            (mid,),
+        ).fetchone()
+
+        if not model_row:
+            raise NotFoundError("model not found")
+
+        owner_id = _row_get(model_row, "owner_user_id", 3)
+        model_app_user_id = _row_get(model_row, "app_user_id", 4)
+
+        if owner_id is not None and int(owner_id) != int(app_user_id):
+            raise ForbiddenError("model does not belong to user")
+        if model_app_user_id is not None and int(model_app_user_id) != int(app_user_id):
+            raise ForbiddenError("model does not belong to user")
+
+        model_name = str(_row_get(model_row, "model_name", 1) or "").strip()
+
+        cfg_raw = _row_get(model_row, "config_json", 2)
+        try:
+            cfg = json.loads(cfg_raw or "{}") if cfg_raw else {}
+        except Exception:
+            cfg = {}
+
+        code_to_label = _build_code_to_label_map(cfg)
+
+        cfg_obj = cfg.get("config") if isinstance(cfg, dict) else None
+        if not isinstance(cfg_obj, dict):
+            cfg_obj = {}
+
+        mr = cfg_obj.get("matchRules")
+        if not isinstance(mr, list):
+            mr = []
+
+        matching_fields: List[Dict[str, Any]] = []
+        for r in mr:
+            if not isinstance(r, dict):
+                continue
+            code = str(r.get("field") or "").strip()
+            if not code:
+                continue
+            label = code_to_label.get(code) or code
+            matching_fields.append(
+                {
+                    "code": code,
+                    "label": label,
+                    "weight": float(_to_float(r.get("weight"), 0.0)),
+                }
+            )
+
+        match_field_pills = [x["label"] for x in matching_fields if x.get("label")]
+
+        survivorship = cfg_obj.get("survivorship")
+        if not isinstance(survivorship, dict):
+            survivorship = {}
+
+        survivorship_mode = str(survivorship.get("mode") or "best").strip() or "best"
+        global_rule = str(survivorship.get("globalRule") or "best").strip() or "best"
+        survivorship_label = _survivorship_rule_label(global_rule)
+
+        survivorship_rules: List[Dict[str, Any]] = []
+        sv_rules = survivorship.get("rules")
+        if isinstance(sv_rules, list):
+            for r in sv_rules:
+                if not isinstance(r, dict):
+                    continue
+                field = str(r.get("field") or "").strip()
+                if not field:
+                    continue
+                rule = str(r.get("rule") or "").strip() or global_rule
+                sources = r.get("sources")
+                survivorship_rules.append(
+                    {
+                        "field": field,
+                        "label": code_to_label.get(field) or field,
+                        "rule": rule,
+                        "rule_label": _survivorship_rule_label(rule),
+                        "sources": sources if isinstance(sources, list) else [],
+                    }
+                )
+
+        job_row = conn.execute(
+            """
+            SELECT *
+            FROM match_job
+            WHERE app_user_id = ?
+              AND model_id = ?
+            ORDER BY created_at DESC, updated_at DESC
+            LIMIT 1
+            """,
+            (app_user_id, mid),
+        ).fetchone()
+
+        job = None
+        job_id = ""
+
+        if job_row:
+            try:
+                job_id = str(job_row["job_id"] or "").strip()
+            except Exception:
+                job_id = ""
+            job = {
+                "job_id": job_id,
+                "status": str(job_row["status"] or ""),
+                "created_at": str(job_row["created_at"] or ""),
+                "updated_at": str(job_row["updated_at"] or ""),
+                "started_at": str(job_row["started_at"] or ""),
+                "finished_at": str(job_row["finished_at"] or ""),
+            }
+
+        golden_records = 0
+        exceptions = 0
+
+        if job_id:
+            gr = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM golden_record
+                WHERE app_user_id = ?
+                  AND model_id = ?
+                  AND job_id = ?
+                """,
+                (app_user_id, mid, job_id),
+            ).fetchone()
+            try:
+                golden_records = int(gr["n"] or 0)
+            except Exception:
+                golden_records = 0
+
+            exr = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM match_exception
+                WHERE app_user_id = ?
+                  AND model_id = ?
+                  AND job_id = ?
+                  AND resolved_at IS NULL
+                """,
+                (app_user_id, mid, job_id),
+            ).fetchone()
+            try:
+                exceptions = int(exr["n"] or 0)
+            except Exception:
+                exceptions = 0
+
+        cl = conn.execute(
+            """
+            SELECT COUNT(DISTINCT cluster_id) AS n
+            FROM cluster_map
+            WHERE app_user_id = ?
+              AND model_id = ?
+            """,
+            (app_user_id, mid),
+        ).fetchone()
+        try:
+            match_clusters = int(cl["n"] or 0)
+        except Exception:
+            match_clusters = 0
+
+    return {
+        "db_file": db_file,
+        "model_id": mid,
+        "model_name": model_name,
+        "job": job,
+        "golden_records": golden_records,
+        "exceptions": exceptions,
+        "match_clusters": match_clusters,
+        "matching_fields": matching_fields,
+        "match_field_pills": match_field_pills,
+        "survivorship_mode": survivorship_mode,
+        "survivorship_label": survivorship_label,
+        "survivorship_global_rule": global_rule,
+        "survivorship_rules": survivorship_rules,
+    }
+
+
+# ---------------------------------------------------------------------------
+# API Key + API ingestion services
+# ---------------------------------------------------------------------------
+
+def _sha256_hex(s: str) -> str:
+    import hashlib
+
+    b = (s or "").encode("utf-8")
+    return hashlib.sha256(b).hexdigest()
+
+
+def _new_api_token() -> str:
+    import secrets
+
+    return "mdm_" + secrets.token_urlsafe(32)
+
+
+def api_key_rotate(*, app_user_id: int, model_id: str, name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Rotate API token:
+    - Enforces one active token per (user, model)
+    - Manual rotate only (no expiry)
+    - Stores only token_hash; returns raw token once
+    """
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    mid = str(model_id or "").strip()
+    if not mid:
+        raise ValidationError("model_id is required")
+
+    name_v = None if name is None else str(name)
+
+    import uuid
+
+    _init_all_tables()
+
+    api_key_id = str(uuid.uuid4())
+    token = _new_api_token()
+    token_hash = _sha256_hex(token)
+    token_prefix = token[:10]
+    now = _utc_now_iso()
+
+    with get_conn() as conn:
+        model_row = conn.execute(
+            """
+            SELECT owner_user_id, app_user_id, deleted_at
+            FROM mdm_models
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (mid,),
+        ).fetchone()
+
+        if not model_row:
+            raise NotFoundError("model not found", payload={"model_id": mid})
+
+        deleted_at = _row_get(model_row, "deleted_at", 2)
+        if deleted_at:
+            raise NotFoundError("model not found", payload={"model_id": mid})
+
+        owner_id = _row_get(model_row, "owner_user_id", 0)
+        model_app_user_id = _row_get(model_row, "app_user_id", 1)
+
+        if owner_id is not None and int(owner_id) != int(app_user_id):
+            raise ForbiddenError("model does not belong to user")
+        if model_app_user_id is not None and int(model_app_user_id) != int(app_user_id):
+            raise ForbiddenError("model does not belong to user")
+
+        conn.execute(
+            """
+            UPDATE api_key
+            SET status='revoked', revoked_at=?
+            WHERE app_user_id=?
+              AND model_id=?
+              AND status='active'
+            """,
+            (now, app_user_id, mid),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO api_key (
+              api_key_id,
+              app_user_id,
+              model_id,
+              name,
+              token_prefix,
+              token_hash,
+              status,
+              created_at,
+              last_used_at,
+              revoked_at
+            ) VALUES (
+              ?,
+              ?,
+              ?,
+              ?,
+              ?,
+              ?,
+              'active',
+              ?,
+              NULL,
+              NULL
+            )
+            """,
+            (api_key_id, app_user_id, mid, name_v, token_prefix, token_hash, now),
+        )
+
+    return {
+        "ok": True,
+        "api_key_id": api_key_id,
+        "model_id": mid,
+        "token_prefix": token_prefix,
+        "token": token,
+        "status": "active",
+        "created_at": now,
+    }
+
+
+def api_key_revoke(*, app_user_id: int, model_id: str) -> Dict[str, Any]:
+    if not isinstance(app_user_id, int):
+        raise ValidationError("app_user_id must be an integer")
+    if app_user_id <= 0:
+        raise ValidationError("app_user_id must be a positive integer")
+
+    mid = str(model_id or "").strip()
+    if not mid:
+        raise ValidationError("model_id is required")
+
+    _init_all_tables()
+    now = _utc_now_iso()
+
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE api_key
+            SET status='revoked', revoked_at=?
+            WHERE app_user_id=?
+              AND model_id=?
+              AND status='active'
+            """,
+            (now, app_user_id, mid),
+        )
+        if cur.rowcount <= 0:
+            raise NotFoundError(
+                "no active api key found",
+                payload={"app_user_id": app_user_id, "model_id": mid},
+            )
+
+    return {"ok": True, "model_id": mid, "revoked_at": now}
+
+
+def _api_authenticate_bearer_token(authorization_header: str) -> Dict[str, Any]:
+    """
+    API auth for ingestion:
+    - Requires Authorization: Bearer <token>
+    - No app_user_id in payload (derived from token)
+    """
+    h = str(authorization_header or "").strip()
+    if not h:
+        raise UnauthorizedError("missing Authorization header")
+
+    if not h.lower().startswith("bearer "):
+        raise UnauthorizedError("invalid Authorization header (expected Bearer token)")
+
+    token = h[7:].strip()
+    if not token:
+        raise UnauthorizedError("missing bearer token")
+
+    token_hash = _sha256_hex(token)
+    now = _utc_now_iso()
+
+    _init_all_tables()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT api_key_id, app_user_id, model_id, status
+            FROM api_key
+            WHERE token_hash = ?
+              AND status = 'active'
+            LIMIT 1
+            """,
+            (token_hash,),
+        ).fetchone()
+
+        if not row:
+            raise UnauthorizedError("invalid or revoked API token")
+
+        conn.execute(
+            "UPDATE api_key SET last_used_at=? WHERE api_key_id=?",
+            (now, row["api_key_id"]),
+        )
+
+        return {
+            "api_key_id": row["api_key_id"],
+            "app_user_id": int(row["app_user_id"]),
+            "model_id": str(row["model_id"]),
+            "status": str(row["status"]),
+            "last_used_at": now,
+        }
+
+
+def api_batch_get(*, authorization: str, batch_id: str) -> Dict[str, Any]:
+    key = _api_authenticate_bearer_token(authorization)
+
+    bid = str(batch_id or "").strip()
+    if not bid:
+        raise ValidationError("batch_id is required")
+
+    _init_all_tables()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM api_batch
+            WHERE batch_id = ?
+              AND api_key_id = ?
+            LIMIT 1
+            """,
+            (bid, key["api_key_id"]),
+        ).fetchone()
+
+        if not row:
+            raise NotFoundError("batch not found", payload={"batch_id": bid})
+
+        return dict(row)
+
+
+def api_ingest_api(*, authorization: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    POST /api/ingest/api
+
+    Contract:
+    - Authorization: Bearer <token>
+    - JSON body: { model_id, batch_id?, finalize?, records: [...] }
+    - records are STRICT source_input contract fields (NO app_user_id)
+    - finalize=true:
+        - blocks if any queued/running match_job exists for user
+        - wipes source_input for user
+        - promotes staging -> source_input
+        - enqueues match job for model_id
+        - wipes staging for that batch
+    """
+    import uuid
+    import sqlite3
+
+    key = _api_authenticate_bearer_token(authorization)
+
+    if not isinstance(body, dict):
+        raise ValidationError("request body must be a JSON object")
+
+    allowed_body_keys = {"model_id", "batch_id", "finalize", "records"}
+    extra_body_keys = set(body.keys()) - allowed_body_keys
+    if extra_body_keys:
+        raise ValidationError(
+            "unexpected top-level fields",
+            payload={"unexpected": sorted([str(x) for x in extra_body_keys])},
+        )
+
+    req_model_id = str(body.get("model_id") or "").strip()
+    if not req_model_id:
+        raise ValidationError("model_id is required")
+
+    if req_model_id != str(key["model_id"]):
+        raise UnauthorizedError("model_id does not match API token")
+
+    finalize = bool(body.get("finalize", False))
+
+    records = body.get("records")
+    if not isinstance(records, list):
+        raise ValidationError("records must be a list")
+
+    bid_raw = body.get("batch_id")
+    batch_id = None if bid_raw is None else str(bid_raw).strip()
+    if not batch_id:
+        batch_id = str(uuid.uuid4())
+
+    now = _utc_now_iso()
+
+    allowed_record_keys = {"source_id", "source_name", "created_at", "created_by", "updated_at", "updated_by"}
+    for i in range(1, 21):
+        allowed_record_keys.add(f"f{str(i).zfill(2)}")
+
+    to_insert = []
+    for idx, r in enumerate(records):
+        if not isinstance(r, dict):
+            raise ValidationError(f"record {idx + 1}: must be an object")
+
+        extra = set(r.keys()) - allowed_record_keys
+        if extra:
+            raise ValidationError(
+                f"record {idx + 1}: unexpected fields",
+                payload={"unexpected": sorted([str(x) for x in extra])},
+            )
+
+        source_id = str(r.get("source_id") or "").strip()
+        source_name = str(r.get("source_name") or "").strip()
+        created_at = str(r.get("created_at") or "").strip()
+        created_by = str(r.get("created_by") or "").strip()
+
+        if not source_id:
+            raise ValidationError(f"record {idx + 1}: source_id is required")
+        if not source_name:
+            raise ValidationError(f"record {idx + 1}: source_name is required")
+        if not created_at:
+            raise ValidationError(f"record {idx + 1}: created_at is required")
+        if not created_by:
+            raise ValidationError(f"record {idx + 1}: created_by is required")
+
+        fvals = []
+        for i in range(1, 21):
+            k = f"f{str(i).zfill(2)}"
+            v = r.get(k)
+            if v is None:
+                fvals.append(None)
+            else:
+                s = str(v).strip()
+                fvals.append(s if s else None)
+
+        updated_at = r.get("updated_at")
+        updated_by = r.get("updated_by")
+        updated_at = None if updated_at is None else str(updated_at).strip() or None
+        updated_by = None if updated_by is None else str(updated_by).strip() or None
+
+        to_insert.append(
+            (
+                batch_id,
+                key["api_key_id"],
+                key["app_user_id"],
+                req_model_id,
+                source_name,
+                source_id,
+                *fvals,
+                created_at,
+                created_by,
+                updated_at,
+                updated_by,
+            )
+        )
+
+    _init_all_tables()
+
+    try:
+        with get_conn() as conn:
+            existing_batch = conn.execute(
+                """
+                SELECT batch_id, status, job_id
+                FROM api_batch
+                WHERE batch_id = ?
+                  AND api_key_id = ?
+                LIMIT 1
+                """,
+                (batch_id, key["api_key_id"]),
+            ).fetchone()
+
+            if not existing_batch:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO api_batch (
+                          batch_id,
+                          api_key_id,
+                          idempotency_key,
+                          status,
+                          job_id,
+                          request_meta_json,
+                          log_json,
+                          error_message,
+                          created_at,
+                          updated_at,
+                          started_at,
+                          finished_at
+                        ) VALUES (
+                          ?,
+                          ?,
+                          ?,
+                          'received',
+                          NULL,
+                          ?,
+                          NULL,
+                          NULL,
+                          datetime('now'),
+                          datetime('now'),
+                          NULL,
+                          NULL
+                        )
+                        """,
+                        (
+                            batch_id,
+                            key["api_key_id"],
+                            batch_id,
+                            json.dumps({"model_id": req_model_id}, ensure_ascii=False),
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    pass
+
+                existing_batch = conn.execute(
+                    """
+                    SELECT batch_id, status, job_id
+                    FROM api_batch
+                    WHERE batch_id = ?
+                      AND api_key_id = ?
+                    LIMIT 1
+                    """,
+                    (batch_id, key["api_key_id"]),
+                ).fetchone()
+
+            if not existing_batch:
+                raise ServiceError("failed to create or read api_batch", payload={"batch_id": batch_id})
+
+            status = str(existing_batch["status"] or "")
+            job_id_existing = existing_batch["job_id"]
+
+            if status != "received":
+                return {
+                    "ok": True,
+                    "batch_id": batch_id,
+                    "status": status,
+                    "job_id": job_id_existing,
+                    "model_id": req_model_id,
+                }
+
+            if to_insert:
+                f_cols = [f"f{str(i).zfill(2)}" for i in range(1, 21)]
+                cols = [
+                    "batch_id",
+                    "api_key_id",
+                    "app_user_id",
+                    "model_id",
+                    "source_name",
+                    "source_id",
+                    *f_cols,
+                    "created_at",
+                    "created_by",
+                    "updated_at",
+                    "updated_by",
+                ]
+                placeholders = ",".join(["?"] * len(cols))
+                update_set = ", ".join(
+                    [
+                        *[f"{c}=excluded.{c}" for c in f_cols],
+                        "created_at=excluded.created_at",
+                        "created_by=excluded.created_by",
+                        "updated_at=excluded.updated_at",
+                        "updated_by=excluded.updated_by",
+                    ]
+                )
+
+                insert_sql = f"""
+                INSERT INTO api_source_input (
+                  {",".join(cols)}
+                ) VALUES (
+                  {placeholders}
+                )
+                ON CONFLICT(app_user_id, model_id, batch_id, source_name, source_id) DO UPDATE SET
+                  {update_set}
+                """
+
+                conn.executemany(insert_sql, to_insert)
+
+            conn.execute(
+                "UPDATE api_batch SET updated_at=datetime('now') WHERE batch_id=? AND api_key_id=?",
+                (batch_id, key["api_key_id"]),
+            )
+
+            staged_row = conn.execute(
+                """
+                SELECT COUNT(1) AS n
+                FROM api_source_input
+                WHERE app_user_id=?
+                  AND model_id=?
+                  AND batch_id=?
+                """,
+                (key["app_user_id"], req_model_id, batch_id),
+            ).fetchone()
+            staged_n = int(_row_get(staged_row, "n", 0) or 0) if staged_row else 0
+
+            if not finalize:
+                return {
+                    "ok": True,
+                    "batch_id": batch_id,
+                    "status": "received",
+                    "model_id": req_model_id,
+                    "received_records": len(records),
+                    "staged_records": staged_n,
+                    "updated_at": now,
+                }
+
+            active_job = conn.execute(
+                """
+                SELECT job_id, status
+                FROM match_job
+                WHERE app_user_id = ?
+                  AND status IN ('queued', 'running')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (key["app_user_id"],),
+            ).fetchone()
+            if active_job:
+                raise ConflictError(
+                    "cannot finalize while a match job is queued or running for this user",
+                    payload={
+                        "job_id": _row_get(active_job, "job_id", 0),
+                        "status": _row_get(active_job, "status", 1),
+                    },
+                )
+
+            if staged_n <= 0:
+                raise ValidationError("no staged records for batch", payload={"batch_id": batch_id})
+
+            conn.execute("DELETE FROM source_input WHERE app_user_id=?", (key["app_user_id"],))
+
+            f_cols_sql = ", ".join([f"f{str(i).zfill(2)}" for i in range(1, 21)])
+            conn.execute(
+                f"""
+                INSERT INTO source_input (
+                  app_user_id,
+                  source_name,
+                  source_id,
+                  {f_cols_sql},
+                  created_at,
+                  created_by,
+                  updated_at,
+                  updated_by
+                )
+                SELECT
+                  app_user_id,
+                  source_name,
+                  source_id,
+                  {f_cols_sql},
+                  created_at,
+                  created_by,
+                  updated_at,
+                  updated_by
+                FROM api_source_input
+                WHERE app_user_id=?
+                  AND model_id=?
+                  AND batch_id=?
+                """,
+                (key["app_user_id"], req_model_id, batch_id),
+            )
+    except ServiceError:
+        raise
+    except sqlite3.OperationalError as e:
+        raise ServiceError("sqlite error", payload={"detail": str(e)})
+    except Exception as ex:
+        raise ServiceError("api ingestion failed", payload={"detail": f"{ex.__class__.__name__}: {ex}"})
+
+    try:
+        job = match_enqueue_job(app_user_id=key["app_user_id"], model_id=req_model_id)
+    except ServiceError as se:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE api_batch
+                SET status='failed', error_message=?, updated_at=datetime('now')
+                WHERE batch_id=?
+                  AND api_key_id=?
+                """,
+                (str(se), batch_id, key["api_key_id"]),
+            )
+        raise
+    except Exception as ex:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE api_batch
+                SET status='failed', error_message=?, updated_at=datetime('now')
+                WHERE batch_id=?
+                  AND api_key_id=?
+                """,
+                (f"{ex.__class__.__name__}: {ex}", batch_id, key["api_key_id"]),
+            )
+        raise
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE api_batch
+            SET status='queued', job_id=?, updated_at=datetime('now')
+            WHERE batch_id=?
+              AND api_key_id=?
+            """,
+            (job.get("job_id"), batch_id, key["api_key_id"]),
+        )
+        conn.execute(
+            """
+            DELETE FROM api_source_input
+            WHERE app_user_id=?
+              AND model_id=?
+              AND batch_id=?
+            """,
+            (key["app_user_id"], req_model_id, batch_id),
+        )
+
+    return {
+        "ok": True,
+        "batch_id": batch_id,
+        "status": "queued",
+        "job_id": job.get("job_id"),
+        "model_id": req_model_id,
+        "finalized_at": now,
     }
 
 

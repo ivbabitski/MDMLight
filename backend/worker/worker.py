@@ -1045,7 +1045,12 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                         best_source_name = str(src_rows[j]["source_name"])
                         best_source_id = str(src_rows[j]["source_id"])
 
-                if best_cluster_id and best_score >= float(cfg.get("possible_T", 0.0) or 0.0):
+                if best_cluster_id and best_score >= float(match_threshold):
+                    assigned_cluster[i] = best_cluster_id
+                    match_statuses[i] = "match"
+                    match_scores[i] = float(best_score)
+                    match_count += 1
+                elif best_cluster_id and best_score >= float(exceptions_threshold):
                     assigned_cluster[i] = best_cluster_id
                     match_statuses[i] = "exception"
                     match_scores[i] = float(best_score)
@@ -1117,9 +1122,10 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 vals.append(r["updated_at"])
                 vals.append(r["updated_by"])
                 vals.append(match_statuses[i])
-                vals.append(float(match_scores[i]))
+                vals.append(round(float(match_scores[i]), 2))
                 vals.append(float(match_threshold))
                 vals.append(float(exceptions_threshold))
+
 
                 recon_inserts.append(tuple(vals))
 
@@ -1270,9 +1276,10 @@ def run_one_job(job_id: str, match_workers: int) -> None:
                 vals.append(r["updated_at"])
                 vals.append(r["updated_by"])
                 vals.append(match_status)
-                vals.append(float(match_score))
+                vals.append(round(float(match_score), 2))
                 vals.append(float(match_threshold))
                 vals.append(float(exceptions_threshold))
+
 
                 recon_inserts.append(tuple(vals))
 

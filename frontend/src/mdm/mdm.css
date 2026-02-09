@@ -459,6 +459,43 @@
   flex: 1;
 }
 
+/* MDM models overlay: EXACT 4px above + 4px below Search/Refresh row */
+.mdmOverlay[aria-label="MDM models"] .mdmDialog__body{
+  padding-top: 8px;
+  gap: 8px;
+}
+
+/* keep row itself “flat” so the 4px comes ONLY from body padding+gap */
+.mdmOverlay[aria-label="MDM models"] .mdmModelsHead{
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.mdmOverlay[aria-label="MDM models"] .mdmModelsHead .mdmInput{
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 34px;
+  box-sizing: border-box;
+}
+
+.mdmOverlay[aria-label="MDM models"] .mdmModelsHead .mdmBtn{
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.mdmOverlay[aria-label="MDM models"] .mdmModelsHead .mdmInput--withIcon{
+  padding-right: 34px;
+}
+
 
 
 .mdmInputIconBtn{
@@ -476,6 +513,25 @@
   display: grid;
   place-items: center;
   cursor: pointer;
+}
+
+.mdmOverlay[aria-label="MDM models"] .mdmModelsHead .mdmInputIconBtn{
+  right: 10px;
+  width: 18px;
+  height: 18px;
+}
+
+/* MDM models overlay: center + shrink the close button */
+.mdmOverlay[aria-label="MDM models"] .mdmDialog__head .mdmX{
+  align-self: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+  font-size: 16px;
 }
 
 .mdmInputIconBtn:hover{
@@ -531,12 +587,17 @@
 .mdmModelsTable .mdmTRow{
   padding-top: 0;
   padding-bottom: 0;
+  gap: 8px;
+}
+
+.mdmModelsTable .mdmTRow{
+  font-size: 13px;
 }
 
 .mdmModelsTable .mdmTHead > div,
 .mdmModelsTable .mdmTRow > div{
-  padding-top: 12px;
-  padding-bottom: 12px;
+  padding-top: 10px;
+  padding-bottom: 10px;
   min-width: 0;
 }
 
@@ -1126,6 +1187,33 @@
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(209,74,74,0.16), rgba(209,74,74,0.36));
+}
+
+/* Matching fields: shared columns sized by longest label (capped), no dead padding */
+.mdmBarList--matchFields{
+  grid-template-columns: max-content 72px minmax(140px, 1fr) 56px;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.mdmBarRow--matchFields{
+  display: contents;
+}
+
+.mdmBarName--matchFields{
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mdmMatchWeight{
+  white-space: nowrap;
+  text-align: right;
+}
+
+.mdmBarList--matchFields .mdmBarTrack{
+  margin-left: 0;
 }
 
 .mdmTag{
