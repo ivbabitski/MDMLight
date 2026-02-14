@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 
-from services import ServiceError, source_input_ingest_batch_from_fields_array
+from services.services import ServiceError, source_input_ingest_batch_from_fields_array
 
 DB_PATH = os.environ.get("DB_PATH", "/data/app.db")
 

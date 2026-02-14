@@ -2884,6 +2884,32 @@ def matching_summary_get(*, app_user_id: int, model_id: str) -> Dict[str, Any]:
             payload={"detail": f"{ex.__class__.__name__}: {ex}"},
         )
 
+    SURVIVORSHIP_LABELS = {
+        "recency_created_date": "Recency (most recently created)",
+        "recency_updated_date": "Recency (most recently updated)",
+        "first_created_date": "First Created",
+        "first_updated_date": "First Updated",
+        "system": "By System Priority",
+        "specific_value_priority": "By Specific Value",
+    }
+
+    def _rule_label(code: str) -> str:
+        c = str(code or "").strip()
+        if not c:
+            return ""
+        return SURVIVORSHIP_LABELS.get(c, c)
+
+    def _is_real_label(code: str, label: str) -> bool:
+        c = str(code or "").strip().lower()
+        l = str(label or "").strip().lower()
+        if not c or not l:
+            return False
+        if l == c:
+            return False
+        if l.startswith("f") and l[1:].isdigit():
+            return False
+        return True
+
     with get_conn() as conn:
         db_file = _get_db_file(conn)
 
@@ -2913,131 +2939,163 @@ def matching_summary_get(*, app_user_id: int, model_id: str) -> Dict[str, Any]:
 
         cfg_raw = _row_get(model_row, "config_json", 2)
         try:
-            cfg = json.loads(cfg_raw or "{}") if cfg_raw else {}
+            model_cfg = json.loads(cfg_raw or "{}") if cfg_raw else {}
         except Exception:
-            cfg = {}
+            model_cfg = {}
 
-        code_to_label = _build_code_to_label_map(cfg)
+        cfg_obj = model_cfg.get("config") if isinstance(model_cfg, dict) else None
+        cfg = cfg_obj if isinstance(cfg_obj, dict) else (model_cfg if isinstance(model_cfg, dict) else {})
+        fields_arr = cfg.get("fields") if isinstance(cfg, dict) else None
+        if not isinstance(fields_arr, list):
+            fields_arr = []
 
-        cfg_obj = cfg.get("config") if isinstance(cfg, dict) else None
-        if not isinstance(cfg_obj, dict):
-            cfg_obj = {}
+        advanced = bool(cfg.get("advanced"))
+        global_rule = str(cfg.get("globalRule") or "").strip()
 
-        mr = cfg_obj.get("matchRules")
-        if not isinstance(mr, list):
-            mr = []
+        def _as_float(v):
+            if v is None:
+                return None
+            s = str(v).strip()
+            if not s:
+                return None
+            try:
+                return float(s)
+            except Exception:
+                return None
 
-        matching_fields: List[Dict[str, Any]] = []
-        for r in mr:
-            if not isinstance(r, dict):
+        def _field_match_threshold(fd: dict):
+            if not isinstance(fd, dict):
+                return None
+
+            v = fd.get("match_threshold")
+            if v is None:
+                v = fd.get("matchThreshold")
+            if v is None:
+                v = fd.get("threshold")
+            if v is None:
+                m = fd.get("match")
+                if isinstance(m, dict):
+                    v = m.get("match_threshold")
+                    if v is None:
+                        v = m.get("matchThreshold")
+                    if v is None:
+                        v = m.get("threshold")
+
+            return _as_float(v)
+
+        matching_fields = []
+        rules_to_fields = {}
+
+        for f in fields_arr:
+            if not isinstance(f, dict):
                 continue
-            code = str(r.get("field") or "").strip()
-            if not code:
+            kind = str(f.get("kind") or "").strip()
+            include = bool(f.get("include"))
+            if kind != "flex" or not include:
                 continue
-            label = code_to_label.get(code) or code
-            matching_fields.append(
-                {
-                    "code": code,
-                    "label": label,
-                    "weight": float(_to_float(r.get("weight"), 0.0)),
-                }
-            )
 
-        match_field_pills = [x["label"] for x in matching_fields if x.get("label")]
+            code = str(f.get("code") or "").strip()
+            label = str(f.get("label") or "").strip()
+            if not _is_real_label(code, label):
+                label = code
 
-        survivorship = cfg_obj.get("survivorship")
-        if not isinstance(survivorship, dict):
-            survivorship = {}
+            try:
+                weight = float(f.get("weight") or 0.0)
+            except Exception:
+                weight = 0.0
 
-        survivorship_mode = str(survivorship.get("mode") or "best").strip() or "best"
-        global_rule = str(survivorship.get("globalRule") or "best").strip() or "best"
-        survivorship_label = _survivorship_rule_label(global_rule)
+            rule_code = str(f.get("rule") or global_rule or "").strip()
 
-        survivorship_rules: List[Dict[str, Any]] = []
-        sv_rules = survivorship.get("rules")
-        if isinstance(sv_rules, list):
-            for r in sv_rules:
-                if not isinstance(r, dict):
-                    continue
-                field = str(r.get("field") or "").strip()
-                if not field:
-                    continue
-                rule = str(r.get("rule") or "").strip() or global_rule
-                sources = r.get("sources")
-                survivorship_rules.append(
+            if rule_code:
+                rules_to_fields.setdefault(rule_code, []).append(code)
+
+            match_threshold = _field_match_threshold(f)
+
+            if weight > 0.0 and match_threshold is not None:
+                matching_fields.append(
                     {
-                        "field": field,
-                        "label": code_to_label.get(field) or field,
-                        "rule": rule,
-                        "rule_label": _survivorship_rule_label(rule),
-                        "sources": sources if isinstance(sources, list) else [],
+                        "code": code,
+                        "label": label,
+                        "weight": weight,
+                        "weight_pct": int(round(weight * 100.0)),
+                        "match_threshold": match_threshold,
+                        "rule": rule_code,
+                        "rule_label": _rule_label(rule_code),
                     }
                 )
 
+        match_field_pills = [
+            x["label"] for x in matching_fields if str(x.get("label") or "").strip()
+        ]
+
+        distinct_rules = [r for r in rules_to_fields.keys() if str(r or "").strip()]
+        distinct_rules.sort()
+
+        survivorship_mode = "global" if not advanced else "per_field"
+        survivorship_label = ""
+
+        if not advanced:
+            survivorship_label = _rule_label(global_rule) if global_rule else ""
+        else:
+            if len(distinct_rules) == 0 and global_rule:
+                survivorship_label = _rule_label(global_rule)
+            elif len(distinct_rules) == 1:
+                survivorship_label = _rule_label(distinct_rules[0])
+            elif len(distinct_rules) > 1:
+                survivorship_mode = "per_field_mixed"
+                survivorship_label = "Per-field (mixed)"
+
+        survivorship_rules = []
+        for r in distinct_rules:
+            survivorship_rules.append(
+                {
+                    "rule": r,
+                    "label": _rule_label(r),
+                    "field_codes": rules_to_fields.get(r, []),
+                }
+            )
+
+        # Latest COMPLETED job (for display only; counts below are totals)
         job_row = conn.execute(
             """
-            SELECT *
+            SELECT job_id, status, created_at, updated_at, started_at, finished_at
             FROM match_job
             WHERE app_user_id = ?
               AND model_id = ?
-            ORDER BY created_at DESC, updated_at DESC
+              AND status = 'completed'
+            ORDER BY COALESCE(finished_at, updated_at, created_at) DESC
             LIMIT 1
             """,
             (app_user_id, mid),
         ).fetchone()
 
         job = None
-        job_id = ""
-
         if job_row:
-            try:
-                job_id = str(job_row["job_id"] or "").strip()
-            except Exception:
-                job_id = ""
             job = {
-                "job_id": job_id,
-                "status": str(job_row["status"] or ""),
-                "created_at": str(job_row["created_at"] or ""),
-                "updated_at": str(job_row["updated_at"] or ""),
-                "started_at": str(job_row["started_at"] or ""),
-                "finished_at": str(job_row["finished_at"] or ""),
+                "job_id": str(_row_get(job_row, "job_id", 0) or "").strip(),
+                "status": str(_row_get(job_row, "status", 1) or "").strip(),
+                "created_at": str(_row_get(job_row, "created_at", 2) or "").strip(),
+                "updated_at": str(_row_get(job_row, "updated_at", 3) or "").strip(),
+                "started_at": str(_row_get(job_row, "started_at", 4) or "").strip(),
+                "finished_at": str(_row_get(job_row, "finished_at", 5) or "").strip(),
             }
 
         golden_records = 0
-        exceptions = 0
+        gr = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM golden_record
+            WHERE app_user_id = ?
+              AND model_id = ?
+            """,
+            (app_user_id, mid),
+        ).fetchone()
+        try:
+            golden_records = int(_row_get(gr, "n", 0) or 0)
+        except Exception:
+            golden_records = 0
 
-        if job_id:
-            gr = conn.execute(
-                """
-                SELECT COUNT(*) AS n
-                FROM golden_record
-                WHERE app_user_id = ?
-                  AND model_id = ?
-                  AND job_id = ?
-                """,
-                (app_user_id, mid, job_id),
-            ).fetchone()
-            try:
-                golden_records = int(gr["n"] or 0)
-            except Exception:
-                golden_records = 0
-
-            exr = conn.execute(
-                """
-                SELECT COUNT(*) AS n
-                FROM match_exception
-                WHERE app_user_id = ?
-                  AND model_id = ?
-                  AND job_id = ?
-                  AND resolved_at IS NULL
-                """,
-                (app_user_id, mid, job_id),
-            ).fetchone()
-            try:
-                exceptions = int(exr["n"] or 0)
-            except Exception:
-                exceptions = 0
-
+        match_clusters = 0
         cl = conn.execute(
             """
             SELECT COUNT(DISTINCT cluster_id) AS n
@@ -3048,9 +3106,25 @@ def matching_summary_get(*, app_user_id: int, model_id: str) -> Dict[str, Any]:
             (app_user_id, mid),
         ).fetchone()
         try:
-            match_clusters = int(cl["n"] or 0)
+            match_clusters = int(_row_get(cl, "n", 0) or 0)
         except Exception:
             match_clusters = 0
+
+        exceptions = 0
+        ex = conn.execute(
+            """
+            SELECT COUNT(DISTINCT cluster_id) AS n
+            FROM recon_cluster
+            WHERE app_user_id = ?
+              AND model_id = ?
+              AND lower(trim(coalesce(match_status, ''))) = 'exception'
+            """,
+            (app_user_id, mid),
+        ).fetchone()
+        try:
+            exceptions = int(_row_get(ex, "n", 0) or 0)
+        except Exception:
+            exceptions = 0
 
     return {
         "db_file": db_file,
@@ -3401,7 +3475,6 @@ def api_ingest_api(*, authorization: str, body: Dict[str, Any]) -> Dict[str, Any
         to_insert.append(
             (
                 batch_id,
-                key["api_key_id"],
                 key["app_user_id"],
                 req_model_id,
                 source_name,
@@ -3501,7 +3574,6 @@ def api_ingest_api(*, authorization: str, body: Dict[str, Any]) -> Dict[str, Any
                 f_cols = [f"f{str(i).zfill(2)}" for i in range(1, 21)]
                 cols = [
                     "batch_id",
-                    "api_key_id",
                     "app_user_id",
                     "model_id",
                     "source_name",
@@ -3512,6 +3584,7 @@ def api_ingest_api(*, authorization: str, body: Dict[str, Any]) -> Dict[str, Any
                     "updated_at",
                     "updated_by",
                 ]
+
                 placeholders = ",".join(["?"] * len(cols))
                 update_set = ", ".join(
                     [

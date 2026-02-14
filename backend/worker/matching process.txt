@@ -37,10 +37,18 @@ compute sim = conservative_similarity(a,b) where:
 
 sim = 1 - lev(a,b) / min(len(a),len(b)) clamped to [0..1]
 
+Threshold=100% shortcut (locked):
+If field.matchThreshold is 100% (1.0), then the field only matches on exact equality (non-blank) and Levenshtein is skipped.
+
+Bounded Levenshtein optimization (locked):
+When Levenshtein is used, the calculation may stop early once the edit distance exceeds the maximum allowed by field.matchThreshold
+(because the field cannot possibly pass its gate). This does not change results.
+
 Missing value rule (locked):
 If either value is missing/blank, that field is an automatic 0 match (sim = 0) for that field.
 
 Field passes if: sim >= field.matchThreshold
+
 
 1.2 Model-level score (weighted gated)
 
@@ -70,6 +78,13 @@ Else → no match
 2) Candidate generation (blocking)
 
 Goal: avoid O(N²) scans; restrict candidate comparisons.
+
+DB indexing (locked):
+To keep candidate queries fast, the database must have indexes supporting scope lookups and ordering, including:
+- recon_cluster(app_user_id, model_id, cluster_id, source_name, source_id)
+- recon_cluster(app_user_id, model_id, source_name, source_id)
+- source_input(app_user_id, source_name, source_id)
+
 
 2.1 Blocking fields selection
 

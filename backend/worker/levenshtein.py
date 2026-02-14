@@ -37,7 +37,64 @@ def levenshtein_distance(a: Optional[str], b: Optional[str]) -> int:
     return prev[-1]
 
 
+def levenshtein_distance_bounded(a: str, b: str, max_distance: int) -> int:
+    """
+    Levenshtein distance with an upper bound.
+    If the true distance exceeds max_distance, returns max_distance + 1.
+
+    This is a performance optimization only; used to early-exit when a field
+    cannot possibly meet its similarity threshold.
+    """
+    if max_distance < 0:
+        return 0
+
+    if a == b:
+        return 0
+
+    la = len(a)
+    lb = len(b)
+
+    if la == 0:
+        return 0 if lb == 0 else (lb if lb <= max_distance else max_distance + 1)
+    if lb == 0:
+        return la if la <= max_distance else max_distance + 1
+
+    if abs(la - lb) > max_distance:
+        return max_distance + 1
+
+    # Ensure b is the shorter string to minimize memory
+    if la < lb:
+        a, b = b, a
+        la, lb = lb, la
+
+    prev = list(range(lb + 1))
+    for i, ca in enumerate(a, start=1):
+        cur = [max_distance + 1] * (lb + 1)
+
+        start_j = max(1, i - max_distance)
+        end_j = min(lb, i + max_distance)
+
+        if start_j == 1:
+            cur[0] = i
+
+        if start_j > end_j:
+            return max_distance + 1
+
+        for j in range(start_j, end_j + 1):
+            cb = b[j - 1]
+            ins = cur[j - 1] + 1
+            dele = prev[j] + 1
+            sub = prev[j - 1] + (0 if ca == cb else 1)
+            cur[j] = min(ins, dele, sub)
+
+        prev = cur
+
+    d = prev[lb]
+    return d if d <= max_distance else max_distance + 1
+
+
 def conservative_similarity(a: Optional[str], b: Optional[str]) -> Tuple[float, int]:
+
     """
     Your model:
       sim = 1 - (lev(a,b) / min(len(a),len(b)))
@@ -83,6 +140,11 @@ def conservative_match(a: Optional[str], b: Optional[str], threshold: float) -> 
     threshold can be:
       - 0..1 (e.g., 0.85)
       - 0..100 (e.g., 85)
+
+    Performance shortcuts (no quality change):
+      - If threshold is 100%, match is strict equality (non-blank) and we skip Levenshtein.
+      - Otherwise, compute the maximum allowed edit distance implied by the threshold and
+        stop Levenshtein early once it cannot pass.
     """
     t = float(threshold)
     if t > 1.0:
@@ -90,7 +152,43 @@ def conservative_match(a: Optional[str], b: Optional[str], threshold: float) -> 
     if not (0.0 <= t <= 1.0):
         raise ValueError("threshold must be in [0..1] or [0..100]")
 
-    sim, d = conservative_similarity(a, b)
+    a0 = "" if a is None else str(a)
+    b0 = "" if b is None else str(b)
+
+    # Missing value rule: missing/blank is automatic 0 match for this field.
+    if len(a0) == 0 or len(b0) == 0:
+        if len(a0) == 0 and len(b0) == 0:
+            return False, 0.0, 0
+        return False, 0.0, max(len(a0), len(b0))
+
+    # Threshold=100%: only exact equality can pass. No Levenshtein needed.
+    if t >= 1.0:
+        if a0 == b0:
+            return True, 1.0, 0
+        return False, 0.0, 1
+
+    # Exact match shortcut
+    if a0 == b0:
+        return True, 1.0, 0
+
+    min_len = min(len(a0), len(b0))
+    if min_len == 0:
+        return False, 0.0, max(len(a0), len(b0))
+
+    # sim = 1 - d/min_len >= t  =>  d <= (1 - t) * min_len
+    max_d = int((1.0 - t) * float(min_len) + 1e-9)
+
+    if max_d <= 0:
+        return False, 0.0, 1
+
+    d = levenshtein_distance_bounded(a0, b0, max_d)
+    sim = 1.0 - (d / float(min_len))
+
+    if sim < 0.0:
+        sim = 0.0
+    elif sim > 1.0:
+        sim = 1.0
+
     return (sim >= t), sim, d
 
 

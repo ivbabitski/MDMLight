@@ -32,8 +32,27 @@ CANDIDATE_MAX = 500
 MATCH_BLOCK_MAX_PREFIX_LEN = int(os.environ.get("MATCH_BLOCK_MAX_PREFIX_LEN", "10"))
 
 
+def _ensure_db_indexes() -> None:
+    # Performance-only: indexes to speed scope filtering + ordering.
+    # Does not change matching logic or results.
+    with get_conn() as conn:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recon_cluster_scope_order "
+            "ON recon_cluster(app_user_id, model_id, cluster_id, source_name, source_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recon_cluster_lookup "
+            "ON recon_cluster(app_user_id, model_id, source_name, source_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_source_input_scope_order "
+            "ON source_input(app_user_id, source_name, source_id)"
+        )
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
 
 
 def _norm(s: Any) -> str:
@@ -1455,10 +1474,12 @@ def main() -> None:
         flush=True,
     )
     init_all_tables()
+    _ensure_db_indexes()
 
     # split CPU budget across concurrent jobs
     job_slots = max(1, JOB_WORKERS)
     per_job_workers = max(1, MATCH_WORKERS_TOTAL // job_slots)
+
 
     ctx = mp.get_context("fork")
     active: Dict[str, mp.Process] = {}

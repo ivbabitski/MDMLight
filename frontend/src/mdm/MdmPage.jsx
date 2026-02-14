@@ -721,6 +721,16 @@ export default function MdmPage() {
   }, [refreshRecords]);
 
   useEffect(() => {
+    function onSelectedModelChangedForRecords() {
+      refreshRecords();
+    }
+
+    window.addEventListener("mdm:selected_model_changed", onSelectedModelChangedForRecords);
+
+    return () => window.removeEventListener("mdm:selected_model_changed", onSelectedModelChangedForRecords);
+  }, [refreshRecords]);
+
+  useEffect(() => {
     function onRunFinished(e) {
       const mid = String(e?.detail?.model_id || "").trim();
       if (!mid) return;
@@ -739,6 +749,7 @@ export default function MdmPage() {
     window.addEventListener("mdm:model_run_finished", onRunFinished);
     return () => window.removeEventListener("mdm:model_run_finished", onRunFinished);
   }, [refreshMatchingSummary, refreshRecords]);
+
 
 
   const totalSourceRecords = useMemo(() => Number(sourceSummary?.total_records || 0), [sourceSummary]);
@@ -1043,8 +1054,7 @@ export default function MdmPage() {
     const cols = [
       "matching_model",
       "master_id",
-      "match_status",
-      "match_score",
+      ...(view === "golden" ? [] : ["match_status", "match_score"]),
       ...userFieldKeys,
       "match_threshold",
       "exceptions_threshold",
@@ -1619,7 +1629,7 @@ export default function MdmPage() {
                 <div>
                   <div className="mdmCard__title">Source information</div>
                   <div className="mdmCard__sub">
-                    {sourceSummaryErr ? `Source input summary error: ${sourceSummaryErr}` : "Total records, per source, fields"}
+                    {sourceSummaryErr ? `Source input summary error: ${sourceSummaryErr}` : "Last load total records, per source, fields"}
                   </div>
                 </div>
 
@@ -2303,8 +2313,8 @@ export default function MdmPage() {
                     <tr>
                       <th>matching_model</th>
                       <th>master_id</th>
-                      <th>match_status</th>
-                      <th>match_score</th>
+                      {view === "golden" ? null : <th>match_status</th>}
+                      {view === "golden" ? null : <th>match_score</th>}
                       {userFieldKeys.map((k) => (
                         <th key={k}>{userFieldLabelByKey[k] || k.toUpperCase()}</th>
                       ))}
@@ -2355,13 +2365,17 @@ export default function MdmPage() {
                             )}
                           </td>
 
-                          <td className="mdmMono">
-                            {String(r.match_status ?? "").trim() ? String(r.match_status) : "—"}
-                          </td>
+                          {view === "golden" ? null : (
+                            <td className="mdmMono">
+                              {String(r.match_status ?? "").trim() ? String(r.match_status) : "—"}
+                            </td>
+                          )}
 
-                          <td className="mdmMono">
-                            {String(r.match_score ?? "").trim() ? String(r.match_score) : "—"}
-                          </td>
+                          {view === "golden" ? null : (
+                            <td className="mdmMono">
+                              {String(r.match_score ?? "").trim() ? String(r.match_score) : "—"}
+                            </td>
+                          )}
 
                           {userFieldKeys.map((k) => (
                             <td key={k}>{String(r[k] || "").trim() ? r[k] : "—"}</td>
